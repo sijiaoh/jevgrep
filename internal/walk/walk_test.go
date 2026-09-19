@@ -96,6 +96,17 @@ func TestFiles(t *testing.T) {
 			want:  []string{".dot.txt", ".gitignore", ".hide/z.txt", "sub/y.log", "sub/y.txt", "x.txt"},
 		},
 		{
+			// A worktree or a submodule spells .git as a one-line file, and
+			// "nothing named .git is searched" has to hold for that too.
+			name: "a .git written as a file is refused like the directory",
+			files: map[string]string{
+				".git":     "gitdir: /elsewhere\n",
+				"keep.txt": "a\n",
+			},
+			opts: walk.Options{Hidden: true, NoIgnore: true},
+			want: []string{"keep.txt"},
+		},
+		{
 			name: "an ignored directory is not descended into",
 			files: map[string]string{
 				".gitignore":    "build/\n",

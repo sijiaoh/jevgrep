@@ -16,7 +16,7 @@ var ignoreNames = []string{".gitignore", ".ignore"}
 // ~/.config/git/ignore is deliberately not read: it would make the same command
 // return different results on two machines, and that is a bug report nobody can
 // reproduce.
-var gitExcludePath = filepath.Join(".git", "info", "exclude")
+var gitExcludePath = filepath.Join(gitName, "info", "exclude")
 
 // ignoreFile is one file's patterns together with the directory they are
 // written against, as a slash-separated path relative to the search root.

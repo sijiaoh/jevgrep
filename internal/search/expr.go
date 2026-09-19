@@ -1,6 +1,8 @@
-// Package search turns a stream of input lines into the lines that match an
-// expression: it schedules the scoring of every line, in parallel, and reports
-// the matches in the order the lines were read.
+// Package search decides a stream of input lines against an expression: it
+// schedules the scoring of every line, in parallel, and reports every line's
+// verdict in the order the lines were read. Not only the matching ones --
+// -A/-B/-C print lines that did not match, -c counts and -L has to know that a
+// file had nothing.
 package search
 
 import (

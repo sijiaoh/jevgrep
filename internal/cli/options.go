@@ -89,6 +89,12 @@ const homePage = "https://github.com/sijiaoh/jevgrep"
 // zero. An option whose flags reach it gets its summary on the next line, so
 // that the summaries stay a single readable column however long a future
 // option's name is.
+//
+// It is bounded from both sides: the longest flags rendered today
+// ("-L, --files-without-match") need 27 columns and must not wrap for nothing,
+// and TestHelpLayout holds the whole line to 80. Raising it further buys
+// nothing and costs every summary the room it takes -- which is why a couple
+// of them are worded shorter than they might otherwise be.
 const summaryColumn = 29
 
 // help is the whole --help page. It names the API host so that nobody can

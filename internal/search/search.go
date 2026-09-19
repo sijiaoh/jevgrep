@@ -38,8 +38,9 @@ type Scorer interface {
 
 // Failure is a batch of lines that could not be scored, named by the range of
 // input lines it covers so the caller can say which part of which file was
-// skipped. The lines are reported as unscored: they are neither printed nor
-// counted as matches, whether or not -v is in effect.
+// skipped. The lines are reported as Unscored: they are never selected,
+// whether or not -v is in effect, so the output can only ever show them as
+// context.
 type Failure struct {
 	File        string
 	First, Last int

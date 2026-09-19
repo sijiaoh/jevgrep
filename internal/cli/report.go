@@ -63,6 +63,11 @@ type quotas struct {
 // quota is one file's state. tail is the lines still to be read after the
 // quota was reached: they can only be printed as -A context, so they are read
 // but never sent.
+//
+// It counts down on the lines that would have been sent, which is the only
+// kind this saves anything on. A blank one in the tail is already free and
+// leaves the count where it was, so the reader gives the printer at least the
+// -A lines it is owed and at most a few free ones more.
 type quota struct {
 	tail int
 	done bool

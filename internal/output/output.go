@@ -1,4 +1,5 @@
-// Package output writes what jevgrep found, in grep's format.
+// Package output writes what jevgrep found: lines in grep's format with their
+// context, the per-file names and counts, or one JSON record per line.
 package output
 
 import (

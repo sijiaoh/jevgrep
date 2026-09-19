@@ -10,12 +10,17 @@ import (
 	"strings"
 )
 
-// gitDir is skipped always, and neither --hidden nor --no-ignore opens it.
+// gitName is skipped always, and neither --hidden nor --no-ignore opens it.
 // ripgrep is laxer here, and jevgrep cannot afford to be: every line searched
 // is billed, a repository's object store dwarfs its working tree, and not one
 // line of it is a line a user meant to read -- the content is already there as
 // files.
-const gitDir = ".git"
+//
+// It is refused as a file as well as a directory: in a worktree or a submodule
+// git writes ".git" as a one-line pointer instead. Nothing is lost by skipping
+// it, and the rule is worth more as "nothing named .git is ever searched" than
+// as one with a shape of ".git" as its exception.
+const gitName = ".git"
 
 // sshDir holds private keys whatever its contents are named, so it is treated
 // as one of them.
@@ -142,7 +147,7 @@ func (w *walker) dir(dir, rel string, stack ignoreStack) bool {
 // is consulted before those two have had their say.
 func (w *walker) skipDir(name, rel string, stack ignoreStack) bool {
 	switch {
-	case name == gitDir, name == sshDir:
+	case name == gitName, name == sshDir:
 		return true
 	case !w.opts.Hidden && isHidden(name):
 		return true
@@ -154,6 +159,8 @@ func (w *walker) skipDir(name, rel string, stack ignoreStack) bool {
 
 func (w *walker) skipFile(name, rel string, stack ignoreStack) bool {
 	switch {
+	case name == gitName:
+		return true
 	case !w.opts.Hidden && isHidden(name):
 		return true
 	case !w.opts.NoIgnore && stack.skip(rel, false):

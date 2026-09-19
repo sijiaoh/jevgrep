@@ -473,3 +473,69 @@ func TestCountsCoverEveryFileAWalkFinds(t *testing.T) {
 		t.Errorf("exit code = %d, want %d (stderr: %q)", got.code, ExitMatch, got.stderr)
 	}
 }
+
+// The three parts of this milestone meet here: a walk decides which files are
+// searched, the output modes decide what is printed about them, and --json
+// replaces the text without changing the selection. Each of them was tested on
+// its own against explicit PATH operands; this is the seam, where a file name
+// is one the walk made up and a file boundary is one no operand announced.
+func TestAWalkFeedsEveryOutputMode(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "files with matches",
+			args: []string{"-rl", "a", "."},
+			want: "f1.txt\nf3.txt\n",
+		},
+		{
+			name: "files without match",
+			args: []string{"-rL", "a", "."},
+			want: "empty.txt\nf2.txt\n",
+		},
+		{
+			// The "--" between the two files is the walk's boundary, not an
+			// operand's, and the gap inside f1.txt is the context window's.
+			name: "lines with context",
+			args: []string{"-rn", "-C1", "a", "."},
+			want: "f1.txt:1:a1\nf1.txt-2-b\nf1.txt:3:a2\nf1.txt-4-c\n--\nf1.txt-6-e\nf1.txt:7:a3\n--\nf3.txt:1:a9\nf3.txt-2-z\n",
+		},
+		{
+			// -m is per file, so a walk hands it a new quota for every file it
+			// turns up, and each one still owes its -A line.
+			name: "max count with trailing context",
+			args: []string{"-rn", "-m1", "-A1", "a", "."},
+			want: "f1.txt:1:a1\nf1.txt-2-b\n--\nf3.txt:1:a9\nf3.txt-2-z\n",
+		},
+		{
+			name: "json over a walk",
+			args: []string{"-r", "--json", "a", "."},
+			want: `{"type":"line","file":"f1.txt","line":1,"text":"a1","score":0.9,"scores":{"a":0.9},"selected":true}
+{"type":"line","file":"f1.txt","line":3,"text":"a2","score":0.9,"scores":{"a":0.9},"selected":true}
+{"type":"line","file":"f1.txt","line":7,"text":"a3","score":0.9,"scores":{"a":0.9},"selected":true}
+{"type":"line","file":"f3.txt","line":1,"text":"a9","score":0.9,"scores":{"a":0.9},"selected":true}
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inFixture(t)
+			env := newEnv(t, scoringServer(t, startsWithA))
+
+			got := exec(t, env, tt.args...)
+
+			if got.stdout != tt.want {
+				t.Errorf("stdout = %q, want %q", got.stdout, tt.want)
+			}
+			if got.code != ExitMatch {
+				t.Errorf("exit code = %d, want %d (stderr: %q)", got.code, ExitMatch, got.stderr)
+			}
+			if got.stderr != "" {
+				t.Errorf("stderr = %q, want it to be empty", got.stderr)
+			}
+		})
+	}
+}
