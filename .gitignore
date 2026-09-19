@@ -1,0 +1,5 @@
+.env
+.pockode/*
+!.pockode/agent-roles/
+.pockode/agent-roles/*
+!.pockode/agent-roles/index.json
