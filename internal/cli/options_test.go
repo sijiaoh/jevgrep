@@ -35,9 +35,9 @@ func TestHelpRendersEveryOption(t *testing.T) {
 }
 
 // The options jevgrep does not have yet must not be advertised: a summary is a
-// promise, and M1 cannot keep these.
+// promise, and the milestone that adds one is the milestone that may name it.
 func TestHelpPromisesNothingUnimplemented(t *testing.T) {
-	for _, flag := range []string{"-r", "--recursive", "--color", "--json", "--stats", "--jobs", "--dry-run", "-c", "-q"} {
+	for _, flag := range []string{"--color", "--json", "--stats", "--jobs", "--dry-run", "-c", "-q"} {
 		if strings.Contains(help(), flag+" ") {
 			t.Errorf("--help mentions %s, which jevgrep does not have", flag)
 		}

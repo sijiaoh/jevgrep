@@ -19,9 +19,10 @@ const (
 	StdinName = "(standard input)"
 )
 
-// ErrIsDirectory is returned by Open for a directory. Walking one is -r, which
-// v0.1 has but this milestone does not; until then a directory is a mistake
-// worth naming rather than a silent empty result.
+// ErrIsDirectory is returned by Open for a directory. Expanding one is -r, and
+// the caller decides that before it opens anything; reaching here means the
+// user gave a directory without asking for -r, which is a mistake worth naming
+// rather than a silent empty result.
 var ErrIsDirectory = errors.New("is a directory")
 
 // maxQueryBytes caps what one line contributes to a request. Prose and code

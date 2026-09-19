@@ -18,6 +18,10 @@ type config struct {
 	paths      []string
 	threshold  float64
 	invert     bool
+	recursive  bool
+	globs      []string
+	hidden     bool
+	noIgnore   bool
 	lineNumber bool
 	filenames  output.Filenames
 	model      string
@@ -225,6 +229,14 @@ func interpret(cfg config, tokens []token) (config, error) {
 				return cfg, usageErrorf("--threshold: not a number between 0 and 1: %q", t.text)
 			}
 			cfg.threshold = n
+		case "recursive":
+			cfg.recursive = true
+		case "glob":
+			cfg.globs = append(cfg.globs, t.text)
+		case "hidden":
+			cfg.hidden = true
+		case "no-ignore":
+			cfg.noIgnore = true
 		case "line-number":
 			cfg.lineNumber = true
 		// Later wins, so that a -h in an alias can be undone by a -H on the

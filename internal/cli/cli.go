@@ -19,6 +19,7 @@ import (
 	"github.com/sijiaoh/jevgrep/internal/jev"
 	"github.com/sijiaoh/jevgrep/internal/output"
 	"github.com/sijiaoh/jevgrep/internal/search"
+	"github.com/sijiaoh/jevgrep/internal/walk"
 )
 
 // Exit codes follow grep: 0 matched, 1 no match, 2 error. Callers of Run pass
@@ -122,17 +123,21 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		return usageFailure(stderr, compileError(err))
 	}
 
-	// How many PATH operands there were is what decides whether output carries
-	// file names, and output owns that rule; reading stdin because there were
-	// none is zero of them.
-	paths, operands := cfg.paths, len(cfg.paths)
-	if operands == 0 {
-		// grep would read the terminal here. jevgrep bills for every line it
-		// reads, so a prompt that looks like a hang is a prompt that runs up a
-		// bill nobody meant to start.
-		if env.terminal.IsTerminal(apikey.Stdin) {
-			return usageFailure(stderr, usageErrorf("no input; give a PATH or pipe data in"))
-		}
+	paths := cfg.paths
+	switch {
+	case len(paths) > 0:
+	// -r with no PATH searches ".", as grep does, and this outranks §4's "no
+	// PATH reads standard input": a command line that spells out -r means to
+	// walk a tree, and quietly searching the pipe instead would be the most
+	// expensive kind of surprise.
+	case cfg.recursive:
+		paths = []string{"."}
+	// grep would read the terminal here. jevgrep bills for every line it
+	// reads, so a prompt that looks like a hang is a prompt that runs up a
+	// bill nobody meant to start.
+	case env.terminal.IsTerminal(apikey.Stdin):
+		return usageFailure(stderr, usageErrorf("no input; give a PATH or pipe data in"))
+	default:
 		paths = []string{input.StdinPath}
 	}
 
@@ -149,9 +154,9 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 	// through, which is what makes matches appear while the rest is still
 	// being scored.
 	printer := output.New(stdout, output.Options{
-		Filenames:  cfg.filenames,
-		Operands:   operands,
-		LineNumber: cfg.lineNumber,
+		Filenames:      cfg.filenames,
+		MultipleInputs: multipleInputs(cfg, paths),
+		LineNumber:     cfg.lineNumber,
 	})
 
 	ctx, stop := interruptible(context.Background())
@@ -160,7 +165,16 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 	defer cancel()
 
 	log := &errorLog{w: stderr}
-	r := &reader{stdin: env.stdin, log: log}
+	r := &reader{
+		stdin:     env.stdin,
+		log:       log,
+		recursive: cfg.recursive,
+		walkOpts: walk.Options{
+			Globs:    cfg.globs,
+			Hidden:   cfg.hidden,
+			NoIgnore: cfg.noIgnore,
+		},
+	}
 	var (
 		matched bool
 		fatal   bool
@@ -247,12 +261,36 @@ func keyFailure(stderr io.Writer, err error) int {
 	return failure(stderr, "%s", err)
 }
 
+// multipleInputs decides the default for -H, which output owns but cannot work
+// out: only here is it known that an operand is a directory -r will expand.
+//
+// A directory operand counts as many inputs on its own, even when it holds one
+// file. The decision has to be made before the first line is printed, and how
+// many files a walk will turn up is exactly what the user did not know either
+// -- which is grep's reasoning too, and its measured behavior.
+func multipleInputs(cfg config, paths []string) bool {
+	if len(paths) > 1 {
+		return true
+	}
+	if !cfg.recursive {
+		return false
+	}
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
 // reader turns the PATH operands into the single stream of lines the searcher
 // reads. A path that cannot be opened is reported and skipped: the other
 // operands are still worth searching, and the run ends at exit code 2 anyway.
 type reader struct {
-	stdin io.Reader
-	log   *errorLog
+	stdin     io.Reader
+	log       *errorLog
+	recursive bool
+	walkOpts  walk.Options
 }
 
 func (r *reader) lines(paths []string) iter.Seq[input.Line] {
@@ -265,8 +303,52 @@ func (r *reader) lines(paths []string) iter.Seq[input.Line] {
 	}
 }
 
-// read streams one input, reporting whether the consumer wants more.
+// read streams one PATH operand, reporting whether the consumer wants more.
 func (r *reader) read(path string, yield func(input.Line) bool) bool {
+	if r.recursive && path != input.StdinPath {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return r.walkDir(path, yield)
+		}
+	}
+	// An operand skips the filters that pick which files are worth searching --
+	// hidden, ignored, secret, all of them: the user named this file, and that
+	// is the one way to search one. The binary test still applies, because it
+	// answers a different question: there is no line in a blob to send, and
+	// paying to ship an executable byte by byte would also ship the binary form
+	// of whatever it was built with.
+	//
+	// A failure to sniff is left unreported here on purpose; opening the file
+	// below fails the same way, and that path is where a directory gets its own
+	// message.
+	if path != input.StdinPath {
+		if binary, err := walk.IsBinary(path); err == nil && binary {
+			// A notice, not an error: it does not change the exit code, because
+			// the run did nothing wrong.
+			r.log.notice("%s: binary file, skipped", path)
+			return true
+		}
+	}
+	return r.file(path, yield)
+}
+
+// walkDir searches every file under a directory operand. A directory that
+// cannot be read is reported and the walk carries on, the same bargain an
+// unreadable file gets.
+func (r *reader) walkDir(dir string, yield func(input.Line) bool) bool {
+	for path, err := range walk.Files(dir, r.walkOpts) {
+		if err != nil {
+			r.log.printf("%s", walkMessage(err))
+			continue
+		}
+		if !r.file(path, yield) {
+			return false
+		}
+	}
+	return true
+}
+
+// file streams one file, or standard input.
+func (r *reader) file(path string, yield func(input.Line) bool) bool {
 	scanner, err := input.Open(path, r.stdin)
 	if err != nil {
 		r.log.printf("%s: %s", displayName(path), osMessage(err))
@@ -295,9 +377,9 @@ func displayName(path string) string {
 }
 
 // errorLog is every "jevgrep: ..." line that is not a usage error, and the
-// memory that there was one. It is guarded because the reader goroutine keeps
-// running for a moment after Run returns on an interrupt, and it reports read
-// errors from there.
+// memory that there was an error among them. It is guarded because the reader
+// goroutine keeps running for a moment after Run returns on an interrupt, and
+// it reports read errors from there.
 type errorLog struct {
 	mu   sync.Mutex
 	w    io.Writer
@@ -308,6 +390,15 @@ func (l *errorLog) printf(format string, a ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.seen = true
+	fmt.Fprintf(l.w, "jevgrep: "+format+"\n", a...)
+}
+
+// notice prints a line that is not a complaint about the run: something was
+// skipped for a reason the user should know, and the exit code stays what it
+// would have been.
+func (l *errorLog) notice(format string, a ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	fmt.Fprintf(l.w, "jevgrep: "+format+"\n", a...)
 }
 
@@ -329,10 +420,25 @@ func failure(stderr io.Writer, format string, a ...any) int {
 func osMessage(err error) string {
 	var pathErr *fs.PathError
 	switch {
+	// The half sentence grep does not have: someone who aimed jevgrep at a
+	// directory wanted -r, and telling them the name of the option is cheaper
+	// than making them look it up.
 	case errors.Is(err, input.ErrIsDirectory):
-		return input.ErrIsDirectory.Error()
+		return input.ErrIsDirectory.Error() + " (use -r to search it)"
 	case errors.As(err, &pathErr):
 		return pathErr.Err.Error()
+	}
+	return err.Error()
+}
+
+// walkMessage names what the walk could not read and then the system's words
+// for it. The error spells itself "open d/locked: permission denied"; an
+// operand that fails is reported as "d/locked: permission denied", and one run
+// should not have two shapes for the same thing.
+func walkMessage(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Path + ": " + pathErr.Err.Error()
 	}
 	return err.Error()
 }

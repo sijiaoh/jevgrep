@@ -244,8 +244,9 @@ func TestADirectoryIsReportedByName(t *testing.T) {
 	got := exec(t, env, "a failure", dir)
 
 	// The path appears once: the system's message for it is used without its
-	// own copy of the path.
-	want := "jevgrep: " + dir + ": is a directory\n"
+	// own copy of the path. The half sentence after it is jevgrep's own: the
+	// user who pointed it at a directory wanted -r.
+	want := "jevgrep: " + dir + ": is a directory (use -r to search it)\n"
 	if got.stderr != want {
 		t.Errorf("stderr = %q, want %q", got.stderr, want)
 	}

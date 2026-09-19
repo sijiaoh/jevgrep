@@ -40,10 +40,10 @@ func TestPrintMatchesTheGoldenFiles(t *testing.T) {
 		golden string
 		opts   output.Options
 	}{
-		{golden: "plain", opts: output.Options{Operands: 1}},
-		{golden: "number", opts: output.Options{Operands: 1, LineNumber: true}},
-		{golden: "file", opts: output.Options{Operands: 2}},
-		{golden: "file-number", opts: output.Options{Operands: 2, LineNumber: true}},
+		{golden: "plain", opts: output.Options{}},
+		{golden: "number", opts: output.Options{LineNumber: true}},
+		{golden: "file", opts: output.Options{MultipleInputs: true}},
+		{golden: "file-number", opts: output.Options{MultipleInputs: true, LineNumber: true}},
 	}
 
 	for _, tt := range tests {
@@ -80,28 +80,22 @@ func compareGolden(t *testing.T, name string, got []byte) {
 	}
 }
 
-func TestFilenameDefaultFollowsTheOperandCount(t *testing.T) {
+func TestFilenameDefaultFollowsTheInputCount(t *testing.T) {
 	tests := []struct {
 		name string
 		opts output.Options
 		want string
 	}{
-		{name: "no operand, so stdin", opts: output.Options{Operands: 0}, want: "x\n"},
-		{name: "one operand", opts: output.Options{Operands: 1}, want: "x\n"},
-		{name: "two operands", opts: output.Options{Operands: 2}, want: "notes.txt:x\n"},
+		{name: "one input", opts: output.Options{}, want: "x\n"},
+		{name: "several inputs", opts: output.Options{MultipleInputs: true}, want: "notes.txt:x\n"},
 		{
-			name: "-H names the file even for one operand",
-			opts: output.Options{Operands: 1, Filenames: output.Always},
+			name: "-H names the file even for one input",
+			opts: output.Options{Filenames: output.Always},
 			want: "notes.txt:x\n",
 		},
 		{
-			name: "-H names the file with no operand at all",
-			opts: output.Options{Operands: 0, Filenames: output.Always},
-			want: "notes.txt:x\n",
-		},
-		{
-			name: "-h wins over the many-operand default",
-			opts: output.Options{Operands: 9, Filenames: output.Never},
+			name: "-h wins over the many-input default",
+			opts: output.Options{MultipleInputs: true, Filenames: output.Never},
 			want: "x\n",
 		},
 	}
@@ -122,7 +116,7 @@ func TestFilenameDefaultFollowsTheOperandCount(t *testing.T) {
 // of their own, so any escape in the output would be one the formatter added.
 func TestPrintAddsNoEscapeSequences(t *testing.T) {
 	var buf bytes.Buffer
-	p := output.New(&buf, output.Options{Operands: 2, LineNumber: true})
+	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
 	for _, l := range lines {
 		p.Print(l)
 	}
@@ -142,7 +136,7 @@ func (w *recordingWriter) Write(p []byte) (int, error) {
 // output as it is written, and half a line is worse than a late one.
 func TestEachLineIsWrittenInOnePiece(t *testing.T) {
 	w := &recordingWriter{}
-	p := output.New(w, output.Options{Operands: 2, LineNumber: true})
+	p := output.New(w, output.Options{MultipleInputs: true, LineNumber: true})
 	for _, l := range lines {
 		p.Print(l)
 	}
@@ -174,7 +168,7 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 func TestWriteErrorsAreReportedAndStopFurtherWrites(t *testing.T) {
 	broken := errors.New("broken pipe")
 	w := &failingWriter{fail: broken, after: 1}
-	p := output.New(w, output.Options{Operands: 1})
+	p := output.New(w, output.Options{})
 
 	for i := range 5 {
 		p.Print(input.Line{File: "notes.txt", Num: i + 1, Text: "x"})
@@ -190,7 +184,7 @@ func TestWriteErrorsAreReportedAndStopFurtherWrites(t *testing.T) {
 }
 
 func TestErrIsNilWhenEveryLineWasWritten(t *testing.T) {
-	p := output.New(&bytes.Buffer{}, output.Options{Operands: 1})
+	p := output.New(&bytes.Buffer{}, output.Options{})
 	p.Print(input.Line{File: "notes.txt", Num: 1, Text: "x"})
 	if err := p.Err(); err != nil {
 		t.Errorf("Err() = %v, want nil", err)
@@ -201,7 +195,7 @@ func TestErrIsNilWhenEveryLineWasWritten(t *testing.T) {
 // a long one is the case that would show it.
 func TestPrintReusesItsBufferSafely(t *testing.T) {
 	var buf bytes.Buffer
-	p := output.New(&buf, output.Options{Operands: 2, LineNumber: true})
+	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
 	p.Print(input.Line{File: "a-rather-long-name.txt", Num: 123456, Text: "a long line of text"})
 	p.Print(input.Line{File: "b.txt", Num: 1, Text: "s"})
 
@@ -213,7 +207,7 @@ func TestPrintReusesItsBufferSafely(t *testing.T) {
 
 func TestEveryOutputLineEndsWithNewline(t *testing.T) {
 	var buf bytes.Buffer
-	p := output.New(&buf, output.Options{Operands: 2, LineNumber: true})
+	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
 	for _, l := range lines {
 		p.Print(l)
 	}
@@ -250,7 +244,7 @@ func TestPrintPlugsIntoSearchAsItIs(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	p := output.New(&buf, output.Options{Operands: 2, LineNumber: true})
+	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
 	s := search.New(scorer{score: 0.9}, expr, search.Options{Emit: p.Print})
 
 	if err := s.Run(t.Context(), slices.Values(lines[:3])); err != nil {

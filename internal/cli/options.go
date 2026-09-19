@@ -31,15 +31,19 @@ type Option struct {
 }
 
 // Options are jevgrep's options in the order --help lists them. The order is
-// meaning, then how to match, then how to print, then the rest: related
-// options next to each other are worth more to a reader than alphabetical
-// order.
+// meaning, then how to match, then which files to search, then how to print,
+// then the rest: related options next to each other are worth more to a reader
+// than alphabetical order.
 var Options = []Option{
 	{Short: "e", Long: "meaning", Arg: "MEANING", Summary: "Add a meaning; repeat to match any of them"},
 	{Long: "and", Arg: "MEANING", Summary: "Also require this meaning on the same line"},
 	{Long: "not", Arg: "MEANING", Summary: "Reject the lines that have this meaning"},
 	{Short: "v", Long: "invert-match", Summary: "Select the lines that do not match"},
 	{Short: "t", Long: "threshold", Arg: "NUM", Summary: "Match at a score of NUM or above", Default: strconv.FormatFloat(defaultThreshold, 'g', -1, 64)},
+	{Short: "r", Long: "recursive", Summary: "Search the files under each directory"},
+	{Short: "g", Long: "glob", Arg: "GLOB", Summary: "Search only the paths matching GLOB, or skip !GLOB"},
+	{Long: "hidden", Summary: "Also search hidden files and directories"},
+	{Long: "no-ignore", Summary: "Do not obey .gitignore and .ignore files"},
 	{Short: "n", Long: "line-number", Summary: "Prefix each output line with its line number"},
 	{Short: "H", Long: "with-filename", Summary: "Print the file name with each output line"},
 	{Short: "h", Long: "no-filename", Summary: "Never print the file name"},
@@ -64,7 +68,7 @@ const homePage = "https://github.com/sijiaoh/jevgrep"
 // zero. An option whose flags reach it gets its summary on the next line, so
 // that the summaries stay a single readable column however long a future
 // option's name is.
-const summaryColumn = 27
+const summaryColumn = 29
 
 // help is the whole --help page. It names the API host so that nobody can
 // discover only after their first bill that the lines left the machine.
@@ -81,7 +85,8 @@ Every line searched is sent to %s to be scored.
 
 Options:
 %s
-With no PATH, or with PATH as -, jevgrep reads standard input.
+With no PATH, jevgrep reads standard input, or searches . under -r.
+With PATH as -, it reads standard input.
 Exit status is %d if a line matched, %d if none did, %d on error.
 
 Home page: %s

@@ -12,12 +12,10 @@ import (
 type Filenames int
 
 const (
-	// Auto is grep's default: name the file only when the command line had more
-	// than one PATH operand. The key is the operand count, not whether a name
+	// Auto is grep's default: name the file only when there is more than one
+	// input to tell apart. The key is how many there are, not whether a name
 	// happens to be available: with a single input the name is the same on every
-	// line and only gets in the way of the next tool in the pipe. (Once -r
-	// arrives, one operand can expand to many files and grep names them; that
-	// rule will have to key on the expanded count, not on Operands.)
+	// line and only gets in the way of the next tool in the pipe.
 	Auto Filenames = iota
 	// Always is -H, Never is -h; either overrides Auto.
 	Always
@@ -29,9 +27,11 @@ const (
 // lives here and is tested here.
 type Options struct {
 	Filenames Filenames
-	// Operands is how many PATH operands were given. Reading stdin because none
-	// were is zero, and an explicit "-" is one.
-	Operands int
+	// MultipleInputs says the run searches more than one input. Working that out
+	// is the caller's job, not this package's: only the command line knows
+	// whether an operand is a directory that -r will expand, and how many files
+	// it expands to is not known when the first line is printed.
+	MultipleInputs bool
 	// LineNumber is -n.
 	LineNumber bool
 }
@@ -53,7 +53,7 @@ type Printer struct {
 func New(w io.Writer, opts Options) *Printer {
 	return &Printer{
 		w:        w,
-		filename: opts.Filenames == Always || (opts.Filenames == Auto && opts.Operands > 1),
+		filename: opts.Filenames == Always || (opts.Filenames == Auto && opts.MultipleInputs),
 		number:   opts.LineNumber,
 	}
 }
