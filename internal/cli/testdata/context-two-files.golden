@@ -1,0 +1,10 @@
+f1.txt:1:a1
+f1.txt-2-b
+f1.txt:3:a2
+f1.txt-4-c
+--
+f1.txt-6-e
+f1.txt:7:a3
+--
+f3.txt:1:a9
+f3.txt-2-z

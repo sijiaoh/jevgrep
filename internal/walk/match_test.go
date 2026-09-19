@@ -113,17 +113,42 @@ func TestGlobSetSkip(t *testing.T) {
 }
 
 func TestIsSecret(t *testing.T) {
-	secret := []string{".env", ".env.local", ".env.production", "server.pem", "tls.key", "cert.p12", "cert.pfx", "id_rsa", "id_ed25519", "id_ed25519.pub"}
-	for _, name := range secret {
-		if !isSecret(name) {
-			t.Errorf("%q is not treated as a secret", name)
-		}
+	tests := []struct {
+		name   string
+		secret bool
+	}{
+		{name: ".env", secret: true},
+		{name: ".env.local", secret: true},
+		{name: ".env.production", secret: true},
+		{name: "server.pem", secret: true},
+		{name: "tls.key", secret: true},
+		{name: "cert.p12", secret: true},
+		{name: "cert.pfx", secret: true},
+		// ssh-keygen's own names, extensionless like every private key it
+		// writes -- including the ones a user renamed to say what they are for.
+		{name: "id_rsa", secret: true},
+		{name: "id_dsa", secret: true},
+		{name: "id_ecdsa", secret: true},
+		{name: "id_ed25519", secret: true},
+		{name: "id_ed25519_work", secret: true},
+		// The public half is not a secret, and an "id_" file with an extension
+		// is in practice source code: neither is worth dropping in silence.
+		{name: "id_ed25519.pub", secret: false},
+		{name: "id_generator.go", secret: false},
+		{name: "id_map.rs", secret: false},
+		{name: "env", secret: false},
+		{name: "environment.go", secret: false},
+		{name: "keys.go", secret: false},
+		{name: "main.go", secret: false},
+		{name: "README.md", secret: false},
+		{name: "ID_RSA", secret: false},
 	}
 
-	ordinary := []string{"env", "environment.go", "keys.go", "main.go", "README.md", "ID_RSA"}
-	for _, name := range ordinary {
-		if isSecret(name) {
-			t.Errorf("%q is treated as a secret", name)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSecret(tt.name); got != tt.secret {
+				t.Errorf("isSecret(%q) = %v, want %v", tt.name, got, tt.secret)
+			}
+		})
 	}
 }

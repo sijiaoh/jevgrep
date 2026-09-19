@@ -12,6 +12,20 @@ import (
 	"github.com/sijiaoh/jevgrep/internal/search"
 )
 
+// The values --color takes. They are the strings the user writes, so that the
+// option table can render the default and the parser can check the spelling
+// against the same three words.
+const (
+	colorAlways = "always"
+	colorNever  = "never"
+	colorAuto   = "auto"
+)
+
+// noMaxCount is config.maxCount when -m was not given. Zero cannot stand for
+// "no limit": -m 0 is a limit, and the one that matters most here, because it
+// is the run that sends nothing and costs nothing.
+const noMaxCount = -1
+
 // config is the command line as the rest of the package wants it.
 type config struct {
 	terms      []search.Term
@@ -24,12 +38,36 @@ type config struct {
 	noIgnore   bool
 	lineNumber bool
 	filenames  output.Filenames
-	model      string
+	fileList   fileList
+	count      bool
+	quiet      bool
+	maxCount   int
+	after      int
+	before     int
+	// context says -A, -B or -C was given at all, which is what brings the
+	// "--" group separator into existence; -A0 gives no context lines and
+	// still brings it.
+	context bool
+	null    bool
+	color   string
+	model   string
 
 	// The three options that do something instead of searching. They are read
 	// even when parsing failed, because --help has to work on a command line
 	// that is otherwise wrong — that is usually why it is being asked for.
 	help, version, login bool
+}
+
+// defaultConfig is the command line before a word of it has been read: every
+// option that is not simply off, in one place, so that the parser and what
+// --help renders cannot disagree about what a default is.
+func defaultConfig() config {
+	return config{
+		threshold: defaultThreshold,
+		maxCount:  noMaxCount,
+		color:     colorAuto,
+		model:     jev.DefaultModel,
+	}
 }
 
 // usageErrorf builds the first line of the usage error message. The errors
@@ -51,7 +89,7 @@ type token struct {
 // parse turns the arguments into a config. It returns a config even when it
 // fails, because the caller still has to honor --help / --version / --login.
 func parse(args []string) (config, error) {
-	cfg := config{threshold: defaultThreshold, model: jev.DefaultModel}
+	cfg := defaultConfig()
 
 	tokens, err := tokenize(args)
 	for _, t := range tokens {
@@ -125,7 +163,9 @@ func (t *tokenizer) long(arg string) {
 	case opt.Arg == "" && hasValue:
 		t.fail(usageErrorf("option --%s takes no argument", opt.Long))
 		return
-	case opt.Arg != "" && !hasValue:
+	// An optional argument is only ever the one written with "=", which is
+	// why the following word is left alone here.
+	case opt.Arg != "" && !hasValue && !opt.ArgOptional:
 		var ok bool
 		if value, ok = t.next(opt); !ok {
 			return
@@ -181,6 +221,16 @@ func needsArgument(opt *Option) error {
 	return usageErrorf("option --%s needs an argument", opt.Long)
 }
 
+// fileList is -l and -L, which are the same question asked the two ways round
+// and so are one setting: the last one written wins.
+type fileList int
+
+const (
+	noFileList fileList = iota
+	withMatches
+	withoutMatch
+)
+
 // interpret turns the tokens into the config, once it is known that this is a
 // search and not --help / --version / --login.
 func interpret(cfg config, tokens []token) (config, error) {
@@ -194,6 +244,12 @@ func interpret(cfg config, tokens []token) (config, error) {
 			break
 		}
 	}
+
+	// -C is merged with -A and -B only where they said nothing, whichever
+	// order the three were written in, so the values are collected first and
+	// settled once the whole command line has been read.
+	var after, before, both int
+	var afterSet, beforeSet, bothSet bool
 
 	for _, t := range tokens {
 		if t.opt == nil {
@@ -245,12 +301,118 @@ func interpret(cfg config, tokens []token) (config, error) {
 			cfg.filenames = output.Always
 		case "no-filename":
 			cfg.filenames = output.Never
+		case "files-with-matches":
+			cfg.fileList = withMatches
+		case "files-without-match":
+			cfg.fileList = withoutMatch
+		case "count":
+			cfg.count = true
+		case "quiet":
+			cfg.quiet = true
+		case "max-count":
+			n, err := lineCount(t.opt, t.text)
+			if err != nil {
+				return cfg, err
+			}
+			cfg.maxCount = n
+		case "after-context":
+			n, err := lineCount(t.opt, t.text)
+			if err != nil {
+				return cfg, err
+			}
+			after, afterSet = n, true
+		case "before-context":
+			n, err := lineCount(t.opt, t.text)
+			if err != nil {
+				return cfg, err
+			}
+			before, beforeSet = n, true
+		case "context":
+			n, err := lineCount(t.opt, t.text)
+			if err != nil {
+				return cfg, err
+			}
+			both, bothSet = n, true
+		case "null":
+			cfg.null = true
+		case "color":
+			// No value at all is "auto", as it is for grep, and it is the one
+			// spelling that does not need the "=".
+			if t.text == "" {
+				t.text = colorAuto
+			}
+			switch t.text {
+			case colorAlways, colorNever, colorAuto:
+				cfg.color = t.text
+			default:
+				return cfg, usageErrorf("--color: not %s, %s or %s: %q", colorAlways, colorNever, colorAuto, t.text)
+			}
 		case "model":
 			cfg.model = t.text
 		}
 	}
+
+	cfg.after, cfg.before = after, before
+	if bothSet {
+		if !afterSet {
+			cfg.after = both
+		}
+		if !beforeSet {
+			cfg.before = both
+		}
+	}
+	cfg.context = afterSet || beforeSet || bothSet
 	return cfg, nil
 }
+
+// lineCount reads the argument of -m, -A, -B or -C.
+//
+// A negative number is a usage error, and this is where jevgrep parts with
+// grep, which reads a negative -m as infinity. That is a historical accident
+// there and would be a billing accident here: a tool that charges by the line
+// must not read "stop after one line" as "read all of them".
+func lineCount(opt *Option, text string) (int, error) {
+	n, err := strconv.Atoi(text)
+	if err != nil || n < 0 {
+		return 0, usageErrorf("--%s: not a whole number of lines at or above 0: %q", opt.Long, text)
+	}
+	return n, nil
+}
+
+// mode is which of the output shapes this command line asks for. They are
+// exclusive and their precedence is grep's, which is not the order they were
+// written in: -q silences everything, -l and -L outrank -c however they were
+// ordered, and -c outranks printing lines -- and with them the context
+// options, which only mean something where lines are printed.
+func (cfg config) mode() mode {
+	switch {
+	case cfg.quiet:
+		return modeQuiet
+	case cfg.fileList == withMatches:
+		return modeFilesWithMatches
+	case cfg.fileList == withoutMatch:
+		return modeFilesWithoutMatch
+	case cfg.count:
+		return modeCount
+	}
+	return modeLines
+}
+
+// mode is one of the shapes jevgrep's output takes.
+type mode int
+
+const (
+	// modeLines is the default: the selected lines, with their context.
+	modeLines mode = iota
+	// modeCount is -c: one count per file, including the files with none.
+	modeCount
+	// modeFilesWithMatches is -l, modeFilesWithoutMatch is -L: the file name
+	// alone, for the files that had a selected line and for those that did not.
+	modeFilesWithMatches
+	modeFilesWithoutMatch
+	// modeQuiet is -q: nothing at all, and the run stops at the first match.
+	modeQuiet
+)
 
 // compileError translates what search.Compile rejects into §5.1 wording. The
 // checks live in search, which is where the expression is built; only the

@@ -37,9 +37,12 @@ func TestHelpRendersEveryOption(t *testing.T) {
 // The options jevgrep does not have yet must not be advertised: a summary is a
 // promise, and the milestone that adds one is the milestone that may name it.
 func TestHelpPromisesNothingUnimplemented(t *testing.T) {
-	for _, flag := range []string{"--color", "--json", "--stats", "--jobs", "--dry-run", "-c", "-q"} {
-		if strings.Contains(help(), flag+" ") {
-			t.Errorf("--help mentions %s, which jevgrep does not have", flag)
+	for _, long := range []string{"score", "json", "stats", "jobs", "dry-run"} {
+		if longOption(long) != nil {
+			t.Errorf("the option table has --%s, which jevgrep does not have", long)
+		}
+		if strings.Contains(help(), "--"+long) {
+			t.Errorf("--help mentions --%s, which jevgrep does not have", long)
 		}
 	}
 }
@@ -50,5 +53,13 @@ func TestDefaultsAreRenderedTheWayFlagDoes(t *testing.T) {
 	}
 	if got := renderDefault("jev-latest"); got != `"jev-latest"` {
 		t.Errorf("renderDefault(jev-latest) = %s, want it quoted", got)
+	}
+}
+
+// An optional argument is rendered the way it has to be written: with the "=",
+// because the word after the option is not read as its value.
+func TestOptionalArgumentsAreRenderedWithTheirEquals(t *testing.T) {
+	if !strings.Contains(renderOptions(), "--color[=WHEN]") {
+		t.Errorf("--help does not render --color[=WHEN]:\n%s", renderOptions())
 	}
 }

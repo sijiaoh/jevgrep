@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sijiaoh/jevgrep/internal/jev"
 	"github.com/sijiaoh/jevgrep/internal/output"
 	"github.com/sijiaoh/jevgrep/internal/search"
 )
@@ -118,7 +117,7 @@ func TestParse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			want := config{threshold: defaultThreshold, model: jev.DefaultModel}
+			want := defaultConfig()
 			tt.want(&want)
 
 			got, err := parse(tt.args)

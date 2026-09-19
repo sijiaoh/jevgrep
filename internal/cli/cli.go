@@ -157,6 +157,11 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		Filenames:      cfg.filenames,
 		MultipleInputs: multipleInputs(cfg, paths),
 		LineNumber:     cfg.lineNumber,
+		Null:           cfg.null,
+		Color:          colorEnabled(env, cfg.color),
+		Before:         cfg.before,
+		After:          cfg.after,
+		Context:        cfg.context,
 	})
 
 	ctx, stop := interruptible(context.Background())
@@ -165,9 +170,13 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 	defer cancel()
 
 	log := &errorLog{w: stderr}
+	files := &opened{}
+	quotas := newQuotas(cfg)
 	r := &reader{
 		stdin:     env.stdin,
 		log:       log,
+		opened:    files,
+		quotas:    quotas,
 		recursive: cfg.recursive,
 		walkOpts: walk.Options{
 			Globs:    cfg.globs,
@@ -175,15 +184,27 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 			NoIgnore: cfg.noIgnore,
 		},
 	}
-	var (
-		matched bool
-		fatal   bool
-	)
+	out := &sink{
+		mode:     cfg.mode(),
+		printer:  printer,
+		opened:   files,
+		quotas:   quotas,
+		maxCount: cfg.maxCount,
+		stop:     cancel,
+	}
+	// Only lines printed with their context can owe a file anything past its
+	// -m quota.
+	if out.mode == modeLines {
+		out.after = cfg.after
+	}
+	var fatal bool
 	searcher := search.New(client, expr, search.Options{
-		Emit: func(l input.Line) {
-			matched = true
-			printer.Print(l)
-		},
+		Emit: out.line,
+		// The reader is asked about the file it is reading, not about the
+		// line: this runs on the reader's own goroutine, inside the yield of
+		// the line it is being asked about, which is what makes a plain field
+		// enough to say which file that is.
+		Skip: func(input.Line) bool { return quotas.skip(r.current) },
 		Fail: func(f search.Failure) {
 			// A request the server will refuse again is refused for every
 			// batch, so reporting it once and stopping says more than the same
@@ -208,6 +229,9 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 	switch {
 	// Already reported, and the cancel it triggered is what Run returns.
 	case fatal:
+	// -q stopped the run itself, at the first match. The lines that were never
+	// read are the point of the option, not a failure.
+	case out.quit:
 	case errors.As(runErr, &authErr):
 		if authErr.StatusCode == http.StatusForbidden {
 			log.printf("that key is not allowed to use this API (HTTP %d)", http.StatusForbidden)
@@ -219,6 +243,11 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		return ExitInterrupt
 	case runErr != nil:
 		log.printf("%s", reason(runErr))
+	// Every file was read to its end, so -c and -L can say what each of them
+	// came to. A run that was cut short says nothing: a count of a file that
+	// was only half read is a wrong count stated as a fact.
+	default:
+		out.done()
 	}
 
 	// The output may have failed silently: Print has no way to report it.
@@ -227,12 +256,34 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 	}
 
 	switch {
+	// -q answers the one question it was asked and nothing else: a match found
+	// is exit 0 even where another file could not be read (the message for it
+	// is on stderr all the same). Without a match the error still decides.
+	case out.mode == modeQuiet && out.matched:
+		return ExitMatch
 	case log.failed():
 		return ExitError
-	case matched:
+	// -L prints the files that did not match and still exits 1 when none did,
+	// because the exit code answers "was a line selected", not "was anything
+	// printed". grep does exactly this, and it is not a slip to fix.
+	case out.matched:
 		return ExitMatch
 	}
 	return ExitNoMatch
+}
+
+// colorEnabled turns --color into the yes or no the printer wants. "auto" asks
+// the terminal, and asks about stdout, which is where the escapes would go:
+// output that is piped or redirected has to stay the bytes the next tool
+// parses. "always" is for `| less -R`, where the pipe is a terminal after all.
+func colorEnabled(env environment, when string) bool {
+	switch when {
+	case colorAlways:
+		return true
+	case colorNever:
+		return false
+	}
+	return env.terminal.IsTerminal(apikey.Stdout)
 }
 
 // isClientError reports whether the server said the request itself was wrong —
@@ -287,8 +338,17 @@ func multipleInputs(cfg config, paths []string) bool {
 // reads. A path that cannot be opened is reported and skipped: the other
 // operands are still worth searching, and the run ends at exit code 2 anyway.
 type reader struct {
-	stdin     io.Reader
-	log       *errorLog
+	stdin  io.Reader
+	log    *errorLog
+	opened *opened
+	// quotas is what -q, -l and -m stop this reader with: a file the output
+	// side is done with is not read any further, and its remaining lines are
+	// never sent to be scored.
+	quotas *quotas
+	// current is the input being read, as its place in the list of opened
+	// ones. It is written and read on this goroutine only: search asks about a
+	// line from inside the yield of that very line.
+	current   int
 	recursive bool
 	walkOpts  walk.Options
 }
@@ -356,7 +416,15 @@ func (r *reader) file(path string, yield func(input.Line) bool) bool {
 	}
 	defer func() { _ = scanner.Close() }()
 
-	for scanner.Scan() {
+	// Listed as soon as it opens, before any line of it is read: a file with
+	// no lines at all still has a count of zero to report and is still a file
+	// that did not match.
+	r.current = r.opened.add(displayName(path))
+
+	for !r.quotas.stopped(r.current) {
+		if !scanner.Scan() {
+			break
+		}
 		if !yield(scanner.Line()) {
 			return false
 		}

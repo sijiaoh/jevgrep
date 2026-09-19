@@ -97,15 +97,34 @@ func numbered(prefix string, n int) []string {
 
 // collector gathers what a run emitted and failed on, in the order it happened.
 type collector struct {
+	// matched is the text of the selected lines, emitted holds every line with
+	// the verdict and scores it came with.
 	matched  []string
+	emitted  []emission
 	failures []Failure
+}
+
+// emission is one call to Emit.
+type emission struct {
+	text   string
+	num    int
+	file   string
+	got    Verdict
+	scores []float64
 }
 
 func (c *collector) options(concurrency int) Options {
 	return Options{
 		Concurrency: concurrency,
-		Emit:        func(l input.Line) { c.matched = append(c.matched, l.Text) },
+		Emit:        c.emit,
 		Fail:        func(f Failure) { c.failures = append(c.failures, f) },
+	}
+}
+
+func (c *collector) emit(l input.Line, v Verdict, scores []float64) {
+	c.emitted = append(c.emitted, emission{text: l.Text, num: l.Num, file: l.File, got: v, scores: scores})
+	if v == Match {
+		c.matched = append(c.matched, l.Text)
 	}
 }
 
@@ -163,7 +182,11 @@ func TestRunEmitsTheFirstMatchesBeforeTheRestAreScored(t *testing.T) {
 	first := make(chan string)
 	opts := Options{
 		Concurrency: 4,
-		Emit:        func(l input.Line) { first <- l.Text },
+		Emit: func(l input.Line, v Verdict, _ []float64) {
+			if v == Match {
+				first <- l.Text
+			}
+		},
 	}
 	s := New(scorer, mustCompile(t, []Term{{Meaning: "line"}}, 0.5, false), opts)
 
@@ -349,8 +372,8 @@ func TestCancellingKeepsWhatWasEmittedAndReportsNoBatchFailures(t *testing.T) {
 	var got collector
 	opts := got.options(4)
 	emit := opts.Emit
-	opts.Emit = func(l input.Line) {
-		emit(l)
+	opts.Emit = func(l input.Line, v Verdict, scores []float64) {
+		emit(l, v, scores)
 		if l.Text == texts[0] {
 			cancel()
 			// Let the requests that were in flight come back cancelled while
@@ -569,5 +592,108 @@ func TestCancellingReturnsEvenWhileTheInputIsStuck(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run() did not return after the context was cancelled")
+	}
+}
+
+// The callback is the only way the caller learns about a line, and -A/-B/-C,
+// -c and -L all need the lines that did not match, so every line has to come
+// through it exactly once and in order.
+func TestEveryLineIsEmittedOnceInOrderWithItsVerdict(t *testing.T) {
+	scorer := &fakeScorer{}
+	var got collector
+	s := New(scorer, mustCompile(t, []Term{{Meaning: "hit"}}, 0.5, false), got.options(0))
+
+	if err := s.Run(t.Context(), lines("a.txt", "one", "hit here", "", "three")); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	want := []emission{
+		{text: "one", num: 1, file: "a.txt", got: NoMatch, scores: []float64{0}},
+		{text: "hit here", num: 2, file: "a.txt", got: Match, scores: []float64{1}},
+		// Never sent, so it has a verdict and no scores at all: the zero it was
+		// decided with is a stand-in, not something the model said.
+		{text: "", num: 3, file: "a.txt", got: NoMatch},
+		{text: "three", num: 4, file: "a.txt", got: NoMatch, scores: []float64{0}},
+	}
+	if !slices.EqualFunc(got.emitted, want, sameEmission) {
+		t.Errorf("emitted %+v, want %+v", got.emitted, want)
+	}
+}
+
+func sameEmission(a, b emission) bool {
+	return a.text == b.text && a.num == b.num && a.file == b.file && a.got == b.got &&
+		slices.Equal(a.scores, b.scores)
+}
+
+// A batch that failed leaves its lines neither selected nor rejected. They are
+// still reported, because they can be printed as context, and they are
+// reported with no scores: a failed request is not a score of zero.
+func TestAFailedBatchEmitsItsLinesUnscored(t *testing.T) {
+	boom := errors.New("scoring failed")
+	scorer := &fakeScorer{respond: func(request) ([]float64, error) { return nil, boom }}
+	var got collector
+	s := New(scorer, mustCompile(t, []Term{{Meaning: "hit"}}, 0.5, false), got.options(1))
+
+	if err := s.Run(t.Context(), lines("a.txt", "hit here", "and here")); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	for _, e := range got.emitted {
+		if e.got != Unscored {
+			t.Errorf("line %q was emitted as %v, want Unscored", e.text, e.got)
+		}
+		if e.scores != nil {
+			t.Errorf("line %q was emitted with scores %v, want none", e.text, e.scores)
+		}
+	}
+	if len(got.emitted) != 2 {
+		t.Errorf("emitted %d lines, want 2", len(got.emitted))
+	}
+	// -v must not turn a line nobody scored into a match.
+	if len(got.matched) != 0 {
+		t.Errorf("matched %q, want nothing", got.matched)
+	}
+}
+
+// Skip is a saving, not a filter: the line still reaches the caller, it just
+// never reaches the model.
+func TestSkippedLinesAreNeverSentAndAreEmittedUnscored(t *testing.T) {
+	scorer := &fakeScorer{}
+	var got collector
+	opts := got.options(0)
+	opts.Skip = func(l input.Line) bool { return l.Num > 2 }
+	s := New(scorer, mustCompile(t, []Term{{Meaning: "hit"}}, 0.5, false), opts)
+
+	if err := s.Run(t.Context(), lines("a.txt", "hit one", "hit two", "hit three")); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	if want := []string{"hit one", "hit two"}; !slices.Equal(scorer.sent(), want) {
+		t.Errorf("sent %q, want %q", scorer.sent(), want)
+	}
+	want := []emission{
+		{text: "hit one", num: 1, file: "a.txt", got: Match, scores: []float64{1}},
+		{text: "hit two", num: 2, file: "a.txt", got: Match, scores: []float64{1}},
+		{text: "hit three", num: 3, file: "a.txt", got: Unscored},
+	}
+	if !slices.EqualFunc(got.emitted, want, sameEmission) {
+		t.Errorf("emitted %+v, want %+v", got.emitted, want)
+	}
+}
+
+// -v inverts a verdict, and a line with no scores has a verdict all the same.
+func TestInvertSelectsTheLinesThatWereNeverSent(t *testing.T) {
+	var got collector
+	s := New(&fakeScorer{}, mustCompile(t, []Term{{Meaning: "hit"}}, 0.5, true), got.options(0))
+
+	if err := s.Run(t.Context(), lines("a.txt", "hit", "")); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	want := []emission{
+		{text: "hit", num: 1, file: "a.txt", got: NoMatch, scores: []float64{1}},
+		{text: "", num: 2, file: "a.txt", got: Match},
+	}
+	if !slices.EqualFunc(got.emitted, want, sameEmission) {
+		t.Errorf("emitted %+v, want %+v", got.emitted, want)
 	}
 }

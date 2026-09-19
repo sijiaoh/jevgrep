@@ -46,14 +46,53 @@ type Failure struct {
 	Err         error
 }
 
+// Verdict is what the expression had to say about one line.
+type Verdict int
+
+const (
+	// NoMatch is a decided line the expression rejected. A line that was never
+	// sent -- a blank one -- lands here too, or in Match, because -v turns it
+	// over: it has a verdict, it just has no scores.
+	NoMatch Verdict = iota
+	// Match is a decided line the expression selected.
+	Match
+	// Unscored is a line whose batch failed. It was neither selected nor
+	// rejected, so it can only ever be printed as context. This is not the same
+	// as having no scores: a blank line has no scores and still has a verdict.
+	Unscored
+)
+
 // Options configures a Searcher. The zero value is usable: the callbacks are
 // optional and the concurrency falls back to the default.
 type Options struct {
 	// Concurrency caps the requests in flight. Zero means defaultConcurrency.
 	Concurrency int
-	// Emit receives every matching line, in the order the lines were read, as
-	// soon as that line is decided. Formatting them is the caller's job.
-	Emit func(input.Line)
+	// Emit receives every line, exactly once, in the order the lines were read,
+	// as soon as that line is decided -- not only the matching ones, because
+	// -A/-B/-C print lines that did not match, -c counts and -L has to know
+	// that a file had nothing. Formatting them is the caller's job.
+	//
+	// scores gives one probability per Expr.Meanings, by index. A nil scores
+	// means this line has no scores at all: either it was never sent (a blank
+	// line) or its batch failed. A non-nil slice belongs to the caller from
+	// then on; Run never writes to it again, so a printer holding lines back
+	// for -B may keep it.
+	//
+	// Emit sees every line but the caller need not keep every line: the
+	// verdicts arrive in input order, so a printer holds at most the -B lines
+	// it may still have to print, and maxPending stays the one thing bounding
+	// what this run has in memory.
+	Emit func(l input.Line, v Verdict, scores []float64)
+	// Skip reports a line the caller already knows the verdict of cannot
+	// matter for -- everything past a file's -m quota, say. Such a line is
+	// never sent to the model and is emitted Unscored. It is the same saving
+	// the reader makes by dropping the rest of a file, for the lines it cannot
+	// drop: every line sent is a paid request.
+	//
+	// It is called on the reader's goroutine, in input order, and only for the
+	// lines that would otherwise be sent: one with nothing to ask about is
+	// already free.
+	Skip func(input.Line) bool
 	// Fail receives every batch that could not be scored, in line order. A
 	// line is in one batch per meaning, so a run that asks two things of the
 	// same line can report it twice -- two requests failed, and both were
@@ -67,8 +106,9 @@ type Searcher struct {
 	expr   *Expr
 
 	concurrency int
-	emit        func(input.Line)
+	emit        func(input.Line, Verdict, []float64)
 	fail        func(Failure)
+	skip        func(input.Line) bool
 }
 
 // New returns a Searcher that scores lines with scorer and decides them with
@@ -80,20 +120,24 @@ func New(scorer Scorer, expr *Expr, opts Options) *Searcher {
 		concurrency: opts.Concurrency,
 		emit:        opts.Emit,
 		fail:        opts.Fail,
+		skip:        opts.Skip,
 	}
 	if s.concurrency < 1 {
 		s.concurrency = defaultConcurrency
 	}
 	if s.emit == nil {
-		s.emit = func(input.Line) {}
+		s.emit = func(input.Line, Verdict, []float64) {}
 	}
 	if s.fail == nil {
 		s.fail = func(Failure) {}
 	}
+	if s.skip == nil {
+		s.skip = func(input.Line) bool { return false }
+	}
 	return s
 }
 
-// Run reads lines, scores them in parallel and reports the matches through
+// Run reads lines, scores them in parallel and reports each one through
 // Options.Emit in input order, without waiting for the whole input.
 //
 // Batches that fail go to Options.Fail and the run carries on, so Run returns
@@ -183,12 +227,16 @@ type run struct {
 type record struct {
 	line  input.Line
 	score []float64
+	// scored says the line was sent, so score is this record's own and may be
+	// handed to the caller. An unsent line shares r.zeros, which is not.
+	scored bool
 	// pending counts the meanings this line is still waiting on.
 	pending int
-	// unscored marks a line whose batch failed: it is dropped rather than
-	// decided, because a missing score is not a score of zero. It does not by
-	// itself finish the line -- a failure counts down pending like a score
-	// does, so that a record outlives every batch that names it.
+	// unscored marks a line whose batch failed, or one the caller asked not to
+	// send: it is reported as Unscored rather than decided, because a missing
+	// score is not a score of zero. A failure does not by itself finish the
+	// line -- it counts down pending like a score does, so that a record
+	// outlives every batch that names it.
 	unscored bool
 	// failures are reported when this record reaches the front of the queue,
 	// so that what lands on stderr is in line order like the matches are.
@@ -211,10 +259,12 @@ type event struct {
 	kind eventKind
 
 	// line and seq describe a line that was read (kindLine); scored says
-	// whether it is one the model will be asked about.
-	line   input.Line
-	seq    int
-	scored bool
+	// whether it is one the model will be asked about, and skipped says the
+	// caller waved it through unjudged.
+	line    input.Line
+	seq     int
+	scored  bool
+	skipped bool
 
 	// seqs are the records a finished batch covers, in request order, and
 	// meaning is which meaning it was scored against (kindScores, kindFailed).
@@ -230,7 +280,11 @@ type event struct {
 func (r *run) handle(ev event) error {
 	switch ev.kind {
 	case kindLine:
-		rec := &record{line: ev.line, score: r.zeros}
+		// A line that is not sent keeps the shared zeros to be decided with --
+		// that is what makes a blank line never match and always be selected
+		// under -v -- but it is emitted with no scores at all, because zero is
+		// a stand-in and not something the model ever said.
+		rec := &record{line: ev.line, score: r.zeros, unscored: ev.skipped, scored: ev.scored}
 		if ev.scored {
 			rec.score = make([]float64, len(r.meanings))
 			rec.pending = len(r.meanings)
@@ -284,13 +338,24 @@ func (r *run) flush() {
 		for _, f := range rec.failures {
 			r.fail(f)
 		}
-		if rec.unscored {
-			continue
-		}
-		if r.expr.Match(rec.score) {
-			r.emit(rec.line)
+		switch {
+		case rec.unscored:
+			r.emit(rec.line, Unscored, nil)
+		case r.expr.Match(rec.score):
+			r.emit(rec.line, Match, r.scores(rec))
+		default:
+			r.emit(rec.line, NoMatch, r.scores(rec))
 		}
 	}
+}
+
+// scores are the probabilities to report for a decided record, or nil when it
+// was never sent.
+func (r *run) scores(rec *record) []float64 {
+	if !rec.scored {
+		return nil
+	}
+	return rec.score
 }
 
 // queued is a line the reader is holding until it has a full batch for every
@@ -317,11 +382,15 @@ func (r *run) read(lines iter.Seq[input.Line]) {
 
 	lines(func(line input.Line) bool {
 		query, scored := line.Query()
+		skipped := false
+		if scored && r.skip(line) {
+			scored, skipped = false, true
+		}
 		if !r.reserve(&buf, sent) {
 			done = true
 			return false
 		}
-		if !r.send(event{kind: kindLine, line: line, seq: seq, scored: scored}) {
+		if !r.send(event{kind: kindLine, line: line, seq: seq, scored: scored, skipped: skipped}) {
 			done = true
 			return false
 		}

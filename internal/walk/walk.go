@@ -26,7 +26,15 @@ const sshDir = ".ssh"
 // a credential to a remote API cannot be undone, so the only way to search one
 // is to name that file on the command line, which is a thing a user can only do
 // on purpose.
-var secretNames = []string{".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_*"}
+var secretNames = []string{".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx"}
+
+// sshKeyPrefix is how ssh-keygen names what it writes: id_rsa, id_ed25519,
+// id_ed25519_work. Matching "id_*" alone would also swallow source files --
+// id_generator.go, id_map.rs -- and a grep that silently drops a file it was
+// asked about costs more trust than a key costs money. What tells the two
+// apart is the extension: a private key has none, its public half is ".pub",
+// and source code always has one.
+const sshKeyPrefix = "id_"
 
 // Options are the command line's answers to "which of these files are worth
 // searching".
@@ -191,5 +199,5 @@ func isSecret(name string) bool {
 			return true
 		}
 	}
-	return false
+	return strings.HasPrefix(name, sshKeyPrefix) && path.Ext(name) == ""
 }

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,15 +28,17 @@ const testKey = "sk-test-not-a-real-key"
 // fakeTerminal answers the two questions --login and "is there input" ask,
 // without a pseudo-terminal.
 type fakeTerminal struct {
-	stdinIsTTY, stderrIsTTY bool
-	secret                  string
-	err                     error
+	stdinIsTTY, stdoutIsTTY, stderrIsTTY bool
+	secret                               string
+	err                                  error
 }
 
 func (f fakeTerminal) IsTerminal(s apikey.Stream) bool {
 	switch s {
 	case apikey.Stdin:
 		return f.stdinIsTTY
+	case apikey.Stdout:
+		return f.stdoutIsTTY
 	case apikey.Stderr:
 		return f.stderrIsTTY
 	}
@@ -59,6 +62,36 @@ func scoringServer(t *testing.T, score func(line string) float64) string {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		answers := make(map[string]any, len(req.State))
+		for id, line := range req.State {
+			answers[id] = map[string]any{"type": "noul", "noul": score(line)}
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"answers": answers,
+			"usage":   map[string]any{"input_tokens": 1, "output_tokens": 0},
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// countingServer scores like scoringServer and counts the lines it was asked
+// about, which is what -q, -l and -m are meant to keep down: every line sent
+// is a line paid for.
+func countingServer(t *testing.T, sent *atomic.Int64, score func(line string) float64) string {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			State map[string]string `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		sent.Add(int64(len(req.State)))
 		answers := make(map[string]any, len(req.State))
 		for id, line := range req.State {
 			answers[id] = map[string]any{"type": "noul", "noul": score(line)}

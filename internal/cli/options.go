@@ -28,6 +28,15 @@ type Option struct {
 	// Default is the default value as a literal, empty if there is none. It is
 	// rendered as " (default X)".
 	Default string
+	// ArgOptional marks an option whose argument may only be given with "=",
+	// the way GNU tools spell an optional argument. Without it "--color" would
+	// swallow the next word, and that word is usually the MEANING.
+	//
+	// Only the long form takes it into account. No option has both a short
+	// form and an optional argument, and one that did would need the short
+	// form's parsing taught the same rule -- the argument attached to the
+	// letter or nothing at all.
+	ArgOptional bool
 }
 
 // Options are jevgrep's options in the order --help lists them. The order is
@@ -47,6 +56,16 @@ var Options = []Option{
 	{Short: "n", Long: "line-number", Summary: "Prefix each output line with its line number"},
 	{Short: "H", Long: "with-filename", Summary: "Print the file name with each output line"},
 	{Short: "h", Long: "no-filename", Summary: "Never print the file name"},
+	{Short: "l", Long: "files-with-matches", Summary: "Print only the name of each file that matched"},
+	{Short: "L", Long: "files-without-match", Summary: "Print only the name of each file that did not match"},
+	{Short: "c", Long: "count", Summary: "Print only the number of matching lines per file"},
+	{Short: "q", Long: "quiet", Summary: "Print nothing; stop at the first match"},
+	{Short: "m", Long: "max-count", Arg: "NUM", Summary: "Stop after NUM matching lines per file"},
+	{Short: "A", Long: "after-context", Arg: "NUM", Summary: "Print NUM lines after each matching line"},
+	{Short: "B", Long: "before-context", Arg: "NUM", Summary: "Print NUM lines before each matching line"},
+	{Short: "C", Long: "context", Arg: "NUM", Summary: "Print NUM lines before and after each matching line"},
+	{Short: "Z", Long: "null", Summary: "Terminate each file name with a NUL byte"},
+	{Long: "color", Arg: "WHEN", ArgOptional: true, Summary: "Color output: always, never, auto", Default: colorAuto},
 	{Long: "model", Arg: "NAME", Summary: "Model that scores the lines", Default: jev.DefaultModel},
 	{Long: "login", Summary: "Store an API key for later runs, then exit"},
 	{Short: "V", Long: "version", Summary: "Print the version and exit"},
@@ -112,7 +131,11 @@ func renderOptions() string {
 			flags += "    "
 		}
 		flags += "--" + o.Long
-		if o.Arg != "" {
+		switch {
+		// An optional argument is rendered the way it has to be written.
+		case o.ArgOptional:
+			flags += "[=" + o.Arg + "]"
+		case o.Arg != "":
 			flags += " " + o.Arg
 		}
 
