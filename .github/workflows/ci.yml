@@ -1,0 +1,54 @@
+# The single quality gate. It deliberately contains no command lines of its own:
+# `make check` (vet + lint + race tests) is the one place those live, and
+# mise.toml is the one place tool versions live, so "green locally" and "green in
+# CI" cannot drift apart.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to the same branch makes the previous run's result irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    # The whole job is seconds of work; anything near this is a hang (a deadlock
+    # in a race test, a stuck download) and should fail fast rather than occupy a
+    # runner for the default six hours.
+    timeout-minutes: 15
+    strategy:
+      # One platform failing is exactly the information the other two would have
+      # provided, so let them finish instead of cancelling them.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        # Git Bash on Windows, so the Makefile's shell usage behaves the same on
+        # all three platforms.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      # GNU Make is not part of the Windows runner image (it is absent from the
+      # image's software list, unlike gcc, which the race detector needs there).
+      # Installing it keeps the Makefile as the single source of commands rather
+      # than spelling out a Windows-only copy of vet/lint/test.
+      - name: Install GNU Make (Windows runners ship without it)
+        if: runner.os == 'Windows'
+        run: choco install make --no-progress --yes
+
+      # Installs exactly the Go and golangci-lint versions pinned in mise.toml;
+      # no version number is repeated in this file.
+      - uses: jdx/mise-action@v4
+
+      - run: make check

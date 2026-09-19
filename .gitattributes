@@ -1,0 +1,6 @@
+# Keep line endings LF everywhere, including in Windows working trees, where Git
+# for Windows is installed with core.autocrlf=true (that is the default on the
+# GitHub Actions Windows runner image). gofmt reports a CRLF source file as
+# unformatted, so without this the Windows CI job would fail lint on files that
+# are correct on every other platform.
+* text=auto eol=lf
