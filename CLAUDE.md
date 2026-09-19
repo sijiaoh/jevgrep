@@ -11,15 +11,28 @@ here, not copied.
 each line with a probability from a remote model instead of matching a pattern.
 Its command line is meant to be compatible with grep's.
 
-Current state: skeleton only. `--version` and `--help` work; no searching is
-implemented yet. Do not document or reference behavior that does not exist.
+Current state: searching works. `jevgrep "a disk error" app.log` scores the
+file's lines against the meaning and prints the ones that match; input can also
+come from a pipe. Alongside it: `-e` / `--and` / `--not` and `-v` to build the
+expression, `-t` for the score threshold, `-n` / `-H` / `-h` for the output
+prefix, `--model`, `--login` to store an API key, `-V` and `--help`.
+
+That is all of it. There is no recursive search, no `-l` / `-L` / `-c` / `-q` /
+`-m`, no context lines, no color, no `--json`, no score output, no cache and no
+`--dry-run` / `--stats`. Do not document or reference behavior that does not
+exist.
 
 ## Layout
 
 ```
 cmd/jevgrep/         entry point; only os.Exit(cli.Run(...))
-internal/cli/        command line: parsing, output, exit codes
+internal/cli/        command line: option table, parsing, wiring, exit codes
 internal/buildinfo/  version string of the running binary
+internal/apikey/     where the API key comes from, --login, terminal checks
+internal/jev/        Jev API client: chunking, retry backoff, error kinds
+internal/input/      reading lines from a file or stdin
+internal/output/     grep-compatible formatting of a matched line
+internal/search/     expression evaluation, concurrent scoring, ordered output
 ```
 
 New packages go under `internal/`. Create one when there is code to put in it —
@@ -57,8 +70,10 @@ no placeholder packages.
 - Comments explain **why**, not what. A comment that restates the code is
   deleted; a non-obvious decision without a recorded reason is what actually
   costs the next reader.
-- The module has no dependencies today. Adding one is a deliberate decision that
-  needs a reason recorded where it is introduced — the stdlib is the default.
+- `golang.org/x/term` is the module's only dependency, and the reason it earned
+  that place is recorded where it is imported. Adding another is a deliberate
+  decision that needs its reason recorded the same way — the stdlib is the
+  default.
 - The README is the single source of truth for user-facing behavior, and is
   written in English. Do not start a second document that explains the same
   thing.
@@ -72,10 +87,26 @@ rather than assuming.
   through the passed writers and the exit code is the return value, so tests
   never touch the real stdout/stderr or spawn a subprocess. Keep this shape.
 - Exit codes follow grep and are named: use `cli.ExitMatch` / `ExitNoMatch` /
-  `ExitError`, never a bare number.
+  `ExitError` / `ExitInterrupt`, never a bare number.
+- `cli.Options` is the one place every option's name, argument and summary
+  lives: `--help` is rendered from it, and the README's option table has to be
+  rendered from it as well. Change an option there, not in prose.
+- `input.Line` keeps the line twice on purpose: `Text` is the bytes as they were
+  read and is what gets printed, while `Query()` returns the cleaned, truncated
+  text sent to the API. Nothing done for the API may reach the output.
+- `jev` splits its failures in two, told apart with `errors.As`:
+  `*jev.AuthError` is terminal and stops the whole run, `*jev.APIError` costs
+  one batch and the search carries on. Neither carries the server's message —
+  that is where the scored lines would come back at us.
+- `search.Run` emits lines in input order however the batches finish, and calls
+  neither `Emit` nor `Fail` once it has returned. Its return value maps straight
+  onto the exit code.
 - The version variable lives in `internal/buildinfo`, not `main`, because
   release tooling stamps it via ldflags and needs a symbol path that survives
   restructuring of `cmd/`.
+- `output.Printer` does not buffer, so the writer handed to it must not either:
+  wrapping stdout in a `bufio.Writer` turns streaming results into one burst at
+  the end, and no test will notice.
 
 ## `.pockode/`
 
