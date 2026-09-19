@@ -1,0 +1,51 @@
+version: "2"
+
+linters:
+  # "standard" = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    # jevgrep talks to a single HTTP endpoint; an unclosed response body is the
+    # classic leak in exactly that shape of code.
+    - bodyclose
+    # Errors are wrapped and inspected with errors.Is/As (exit-code contract),
+    # so %v-instead-of-%w and == comparisons on errors are real bugs here.
+    - errorlint
+    # Most strings in this repo are user-facing CLI output.
+    - misspell
+    # Requires every //nolint to name a linter and give a reason, so suppressions
+    # stay reviewable instead of accumulating silently.
+    - nolintlint
+  settings:
+    errcheck:
+      # All output goes through these to the process's stdout/stderr. The case
+      # that actually matters, a closed pipe (`jevgrep ... | head`), is already
+      # handled: the Go runtime turns EPIPE on fd 1/2 into SIGPIPE and dies,
+      # which is exactly what grep does. Checking the return value at every
+      # print site would buy nothing and bury the sites where errors do matter.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+issues:
+  # golangci-lint otherwise caps its report at 50 issues per linter and 3
+  # repeats of the same message. A whole-repo problem (every file reformatted,
+  # every file CRLF) then shows up as "3 issues" and the count is simply wrong,
+  # which is the worst way for a gate to fail. Report everything.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    # Import grouping is otherwise the most common source of trivial diffs.
+    - goimports
+  settings:
+    goimports:
+      # Keeps this module's own packages in their own block once internal/*
+      # starts importing internal/*, instead of mixed in with the stdlib.
+      local-prefixes:
+        - github.com/sijiaoh/jevgrep

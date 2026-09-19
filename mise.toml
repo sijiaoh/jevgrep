@@ -1,0 +1,13 @@
+# Pins the toolchain for both local development and CI, so "works on my machine"
+# and "passes CI" mean the same thing. Go is pinned to the minimum version the
+# module supports (go.mod `go` directive): building against the oldest supported
+# release is what catches accidental use of newer stdlib APIs.
+[tools]
+go = "1.26.8"
+golangci-lint = "2.13.2"
+
+[settings]
+# mise otherwise infers the Go version from go.mod's `go` directive, which is a
+# *minimum*, not the build version (mise deprecates that inference). Disabling it
+# keeps [tools] above as the single source of truth.
+idiomatic_version_file_enable_tools = []
