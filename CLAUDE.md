@@ -11,16 +11,25 @@ here, not copied.
 each line with a probability from a remote model instead of matching a pattern.
 Its command line is meant to be compatible with grep's.
 
-Current state: searching works. `jevgrep "a disk error" app.log` scores the
-file's lines against the meaning and prints the ones that match; input can also
-come from a pipe. Alongside it: `-e` / `--and` / `--not` and `-v` to build the
-expression, `-t` for the score threshold, `-n` / `-H` / `-h` for the output
-prefix, `--model`, `--login` to store an API key, `-V` and `--help`.
+Current state: searching works, and so does most of grep's command line around
+it. `jevgrep "a disk error" app.log` scores the file's lines against the meaning
+and prints the ones that match; input can also come from a pipe, from several
+PATHs, or from a whole tree with `-r`. On top of that: the expression
+(`-e` / `--and` / `--not` / `-v` / `-t`), which files a walk searches
+(`-g` / `--hidden` / `--no-ignore`), grep's output modes and decorations
+(`-l` / `-L` / `-c` / `-q` / `-m`, `-A` / `-B` / `-C`, `-n` / `-H` / `-h` /
+`-Z` / `--color`), jevgrep's own two (`-p` for the score, `--json` for NDJSON),
+plus `--model`, `--login` to store an API key, `-V` and `--help`. The full list
+is `cli.Options`; read it there rather than here.
 
-That is all of it. There is no recursive search, no `-l` / `-L` / `-c` / `-q` /
-`-m`, no context lines, no color, no `--json`, no score output, no cache and no
-`--dry-run` / `--stats`. Do not document or reference behavior that does not
-exist.
+Two traits of the walk are jevgrep's rather than grep's, and are load-bearing:
+`.git/` and credential-shaped files are never searched by a walk — no option
+reopens them — and binary content is skipped even when the path was named
+explicitly. Every line searched is billed, and a credential sent to a remote API
+cannot be recalled.
+
+What still does not exist: no cache and no `--dry-run` / `--stats`. Do not
+document or reference behavior that does not exist.
 
 ## Layout
 
@@ -31,8 +40,9 @@ internal/buildinfo/  version string of the running binary
 internal/apikey/     where the API key comes from, --login, terminal checks
 internal/jev/        Jev API client: chunking, retry backoff, error kinds
 internal/input/      reading lines from a file or stdin
-internal/output/     grep-compatible formatting of a matched line
-internal/search/     expression evaluation, concurrent scoring, ordered output
+internal/walk/       expanding a directory into the files worth searching
+internal/output/     writing what was found: lines, context, counts, JSON
+internal/search/     expression evaluation, concurrent scoring, ordered verdicts
 ```
 
 New packages go under `internal/`. Create one when there is code to put in it —
@@ -90,7 +100,8 @@ rather than assuming.
   `ExitError` / `ExitInterrupt`, never a bare number.
 - `cli.Options` is the one place every option's name, argument and summary
   lives: `--help` is rendered from it, and the README's option table has to be
-  rendered from it as well. Change an option there, not in prose.
+  rendered from it as well. Change an option there, not in prose. An option
+  whose argument may only be attached with `=` is marked `ArgOptional`.
 - `input.Line` keeps the line twice on purpose: `Text` is the bytes as they were
   read and is what gets printed, while `Query()` returns the cleaned, truncated
   text sent to the API. Nothing done for the API may reach the output.
@@ -98,15 +109,21 @@ rather than assuming.
   `*jev.AuthError` is terminal and stops the whole run, `*jev.APIError` costs
   one batch and the search carries on. Neither carries the server's message —
   that is where the scored lines would come back at us.
-- `search.Run` emits lines in input order however the batches finish, and calls
-  neither `Emit` nor `Fail` once it has returned. Its return value maps straight
-  onto the exit code.
+- `search.Run` reports *every* line, exactly once, in input order however the
+  batches finish, and calls neither `Emit` nor `Fail` once it has returned. A
+  line arrives with a `Verdict` and its scores, and nil scores mean it has none
+  — never sent, or its batch failed — which is a different thing from its
+  verdict. The return value maps straight onto the exit code.
 - The version variable lives in `internal/buildinfo`, not `main`, because
   release tooling stamps it via ldflags and needs a symbol path that survives
   restructuring of `cmd/`.
-- `output.Printer` does not buffer, so the writer handed to it must not either:
+- `output.Printer` owns the whole shape of what reaches stdout — line formats,
+  the context window and its `--` separators, per-file names and counts, the
+  NDJSON records — which is why `Print` takes every line and not only the
+  selected ones. It does not buffer, so the writer handed to it must not either:
   wrapping stdout in a `bufio.Writer` turns streaming results into one burst at
-  the end, and no test will notice.
+  the end, and no test will notice. The only thing it holds back is the lines
+  `-B` may still have to print.
 
 ## `.pockode/`
 
