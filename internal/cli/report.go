@@ -166,7 +166,7 @@ type sink struct {
 
 // line receives one decided line. Unscored lines -- the ones whose batch
 // failed -- are never selected, so they can only ever be printed as context.
-func (s *sink) line(l input.Line, v search.Verdict, _ []float64) {
+func (s *sink) line(l input.Line, v search.Verdict, scores []float64) {
 	// Line numbers restart at 1, so a number that does not carry on from the
 	// last one is a new input even where the same path was given twice.
 	if !s.open || l.File != s.file || l.Num <= s.num {
@@ -194,7 +194,7 @@ func (s *sink) line(l input.Line, v search.Verdict, _ []float64) {
 			s.quotas.reach(s.index, 0)
 		}
 	case modeLines:
-		s.printer.Print(l, selected)
+		s.printer.Print(l, scores, selected)
 	}
 
 	// Nothing after a file's -m quota can change any of the output shapes:

@@ -51,7 +51,7 @@ func TestPrintMatchesTheGoldenFiles(t *testing.T) {
 			var buf bytes.Buffer
 			p := output.New(&buf, tt.opts)
 			for _, l := range lines {
-				p.Print(l, true)
+				p.Print(l, nil, true)
 			}
 			if err := p.Err(); err != nil {
 				t.Fatalf("Err() = %v, want nil", err)
@@ -104,7 +104,7 @@ func TestFilenameDefaultFollowsTheInputCount(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			p := output.New(&buf, tt.opts)
-			p.Print(input.Line{File: "notes.txt", Num: 1, Text: "x"}, true)
+			p.Print(input.Line{File: "notes.txt", Num: 1, Text: "x"}, nil, true)
 			if got := buf.String(); got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
@@ -118,7 +118,7 @@ func TestPrintAddsNoEscapeSequences(t *testing.T) {
 	var buf bytes.Buffer
 	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
 	for _, l := range lines {
-		p.Print(l, true)
+		p.Print(l, nil, true)
 	}
 	if bytes.Contains(buf.Bytes(), []byte{0x1b}) {
 		t.Errorf("output contains an ANSI escape: %q", buf.String())
@@ -138,7 +138,7 @@ func TestEachLineIsWrittenInOnePiece(t *testing.T) {
 	w := &recordingWriter{}
 	p := output.New(w, output.Options{MultipleInputs: true, LineNumber: true})
 	for _, l := range lines {
-		p.Print(l, true)
+		p.Print(l, nil, true)
 	}
 
 	if len(w.writes) != len(lines) {
@@ -171,7 +171,7 @@ func TestWriteErrorsAreReportedAndStopFurtherWrites(t *testing.T) {
 	p := output.New(w, output.Options{})
 
 	for i := range 5 {
-		p.Print(input.Line{File: "notes.txt", Num: i + 1, Text: "x"}, true)
+		p.Print(input.Line{File: "notes.txt", Num: i + 1, Text: "x"}, nil, true)
 	}
 
 	if !errors.Is(p.Err(), broken) {
@@ -185,7 +185,7 @@ func TestWriteErrorsAreReportedAndStopFurtherWrites(t *testing.T) {
 
 func TestErrIsNilWhenEveryLineWasWritten(t *testing.T) {
 	p := output.New(&bytes.Buffer{}, output.Options{})
-	p.Print(input.Line{File: "notes.txt", Num: 1, Text: "x"}, true)
+	p.Print(input.Line{File: "notes.txt", Num: 1, Text: "x"}, nil, true)
 	if err := p.Err(); err != nil {
 		t.Errorf("Err() = %v, want nil", err)
 	}
@@ -196,8 +196,8 @@ func TestErrIsNilWhenEveryLineWasWritten(t *testing.T) {
 func TestPrintReusesItsBufferSafely(t *testing.T) {
 	var buf bytes.Buffer
 	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
-	p.Print(input.Line{File: "a-rather-long-name.txt", Num: 123456, Text: "a long line of text"}, true)
-	p.Print(input.Line{File: "b.txt", Num: 1, Text: "s"}, true)
+	p.Print(input.Line{File: "a-rather-long-name.txt", Num: 123456, Text: "a long line of text"}, nil, true)
+	p.Print(input.Line{File: "b.txt", Num: 1, Text: "s"}, nil, true)
 
 	want := "a-rather-long-name.txt:123456:a long line of text\nb.txt:1:s\n"
 	if got := buf.String(); got != want {
@@ -209,7 +209,7 @@ func TestEveryOutputLineEndsWithNewline(t *testing.T) {
 	var buf bytes.Buffer
 	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
 	for _, l := range lines {
-		p.Print(l, true)
+		p.Print(l, nil, true)
 	}
 	got := bytes.Count(buf.Bytes(), []byte("\n"))
 	if got != len(lines) {
@@ -246,7 +246,7 @@ func TestPrintPlugsIntoSearchAsItIs(t *testing.T) {
 	var buf bytes.Buffer
 	p := output.New(&buf, output.Options{MultipleInputs: true, LineNumber: true})
 	s := search.New(scorer{score: 0.9}, expr, search.Options{
-		Emit: func(l input.Line, v search.Verdict, _ []float64) { p.Print(l, v == search.Match) },
+		Emit: func(l input.Line, v search.Verdict, _ []float64) { p.Print(l, nil, v == search.Match) },
 	})
 
 	if err := s.Run(t.Context(), slices.Values(lines[:3])); err != nil {
@@ -280,7 +280,7 @@ var f1 = []struct {
 
 func printF1(p *output.Printer) {
 	for _, l := range f1 {
-		p.Print(l.line, l.selected)
+		p.Print(l.line, nil, l.selected)
 	}
 }
 
@@ -345,8 +345,8 @@ func TestContextIsPrintedOnceAndNeverCrossesFiles(t *testing.T) {
 		MultipleInputs: true, LineNumber: true, Context: true, Before: 2, After: 2,
 	})
 	printF1(p)
-	p.Print(input.Line{File: "f3.txt", Num: 1, Text: "a9"}, true)
-	p.Print(input.Line{File: "f3.txt", Num: 2, Text: "z"}, false)
+	p.Print(input.Line{File: "f3.txt", Num: 1, Text: "a9"}, nil, true)
+	p.Print(input.Line{File: "f3.txt", Num: 2, Text: "z"}, nil, false)
 
 	want := "f1.txt:1:a1\nf1.txt-2-b\nf1.txt:3:a2\nf1.txt-4-c\nf1.txt-5-d\nf1.txt-6-e\nf1.txt:7:a3\n" +
 		"--\nf3.txt:1:a9\nf3.txt-2-z\n"
@@ -360,8 +360,8 @@ func TestContextIsPrintedOnceAndNeverCrossesFiles(t *testing.T) {
 func TestLineNumbersStartingOverStartANewGroup(t *testing.T) {
 	var buf bytes.Buffer
 	p := output.New(&buf, output.Options{LineNumber: true, Context: true, After: 1})
-	p.Print(input.Line{File: "f.txt", Num: 1, Text: "a"}, true)
-	p.Print(input.Line{File: "f.txt", Num: 1, Text: "a"}, true)
+	p.Print(input.Line{File: "f.txt", Num: 1, Text: "a"}, nil, true)
+	p.Print(input.Line{File: "f.txt", Num: 1, Text: "a"}, nil, true)
 
 	if want := "1:a\n--\n1:a\n"; buf.String() != want {
 		t.Errorf("got %q, want %q", buf.String(), want)
@@ -414,9 +414,9 @@ func TestColorPaintsTheFieldsAndNotTheText(t *testing.T) {
 	p := output.New(&buf, output.Options{
 		Filenames: output.Always, LineNumber: true, Color: true, Context: true, After: 1,
 	})
-	p.Print(input.Line{File: "f1.txt", Num: 1, Text: "a1"}, true)
-	p.Print(input.Line{File: "f1.txt", Num: 2, Text: "b"}, false)
-	p.Print(input.Line{File: "f1.txt", Num: 7, Text: "a3"}, true)
+	p.Print(input.Line{File: "f1.txt", Num: 1, Text: "a1"}, nil, true)
+	p.Print(input.Line{File: "f1.txt", Num: 2, Text: "b"}, nil, false)
+	p.Print(input.Line{File: "f1.txt", Num: 7, Text: "a3"}, nil, true)
 	p.Count("f1.txt", 2)
 	p.Name("f1.txt")
 
@@ -476,11 +476,163 @@ func TestBeforeContextHoldsNoMoreThanItWasAskedFor(t *testing.T) {
 	var buf bytes.Buffer
 	p := output.New(&buf, output.Options{LineNumber: true, Context: true, Before: 2})
 	for i := range 1000 {
-		p.Print(input.Line{File: "f.txt", Num: i + 1, Text: strconv.Itoa(i + 1)}, false)
+		p.Print(input.Line{File: "f.txt", Num: i + 1, Text: strconv.Itoa(i + 1)}, nil, false)
 	}
-	p.Print(input.Line{File: "f.txt", Num: 1001, Text: "hit"}, true)
+	p.Print(input.Line{File: "f.txt", Num: 1001, Text: "hit"}, nil, true)
 
 	if want := "999-999\n1000-1000\n1001:hit\n"; buf.String() != want {
 		t.Errorf("got %q, want %q", buf.String(), want)
+	}
+}
+
+// headline stands in for the expression's own reduction: the printer is given
+// the rule, it does not know it.
+func headline(scores []float64) float64 { return scores[0] }
+
+// -p sits where grep's byte offset does -- after the line number, before the
+// text -- and is always four characters wide, so that a field a script reads
+// with `awk -F:` has one shape.
+func TestScorePrintsAFixedWidthField(t *testing.T) {
+	tests := []struct {
+		name   string
+		scores []float64
+		want   string
+	}{
+		{name: "a plain score", scores: []float64{0.91}, want: "1:0.91:a1\n"},
+		{name: "certainty is still four characters", scores: []float64{1}, want: "1:1.00:a1\n"},
+		{name: "and so is zero", scores: []float64{0}, want: "1:0.00:a1\n"},
+		{name: "rounded to two decimals", scores: []float64{0.123456}, want: "1:0.12:a1\n"},
+		// A line that was never sent, or whose batch failed, has no score at
+		// all. Printing 0.00 there would be quoting an answer the model was
+		// never asked for.
+		{name: "no score at all", scores: nil, want: "1:?:a1\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			p := output.New(&buf, output.Options{LineNumber: true, Score: true, Headline: headline})
+			p.Print(input.Line{File: "f1.txt", Num: 1, Text: "a1"}, tt.scores, true)
+			if got := buf.String(); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// A context line carries its score too, behind the "-" that says what it is.
+func TestScoreIsPrintedOnContextLinesAsWell(t *testing.T) {
+	var buf bytes.Buffer
+	p := output.New(&buf, output.Options{
+		LineNumber: true, Score: true, Headline: headline, Context: true, Before: 1, After: 1,
+	})
+	p.Print(input.Line{File: "f1.txt", Num: 1, Text: "b"}, []float64{0.12}, false)
+	p.Print(input.Line{File: "f1.txt", Num: 2, Text: "a1"}, []float64{0.91}, true)
+	p.Print(input.Line{File: "f1.txt", Num: 3, Text: "c"}, []float64{0.08}, false)
+
+	if want := "1-0.12-b\n2:0.91:a1\n3-0.08-c\n"; buf.String() != want {
+		t.Errorf("got %q, want %q", buf.String(), want)
+	}
+}
+
+// The score is colored like the line number: both say what the line is, in
+// front of what it says.
+func TestScoreIsColoredLikeTheLineNumber(t *testing.T) {
+	var buf bytes.Buffer
+	p := output.New(&buf, output.Options{LineNumber: true, Score: true, Headline: headline, Color: true})
+	p.Print(input.Line{File: "f1.txt", Num: 1, Text: "a1"}, []float64{0.91}, true)
+
+	want := "\x1b[32m1\x1b[m\x1b[36m:\x1b[m\x1b[32m0.91\x1b[m\x1b[36m:\x1b[ma1\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// The record is one line of NDJSON with its fields in a fixed order, which is
+// what a golden test and a user's `jq` both rely on.
+func TestJSONRecordsAreNDJSON(t *testing.T) {
+	var buf bytes.Buffer
+	p := output.New(&buf, output.Options{
+		// Every text decoration on at once: none of them may show.
+		Filenames: output.Always, LineNumber: true, Null: true, Color: true, Score: true,
+		JSON: true, Meanings: []string{"a disk error"}, Headline: headline,
+		Context: true, Before: 1, After: 0,
+	})
+	p.Print(input.Line{File: "app.log", Num: 11, Text: "starting up"}, []float64{0.04}, false)
+	p.Print(input.Line{File: "app.log", Num: 12, Text: "I/O error on sda1"}, []float64{0.91}, true)
+	// A line with no scores, and a jump in the line numbers that would have
+	// brought the "--" separator out in the text format.
+	p.Print(input.Line{File: "app.log", Num: 20, Text: ""}, nil, true)
+
+	want := `{"type":"line","file":"app.log","line":11,"text":"starting up","score":0.04,"scores":{"a disk error":0.04},"selected":false}` + "\n" +
+		`{"type":"line","file":"app.log","line":12,"text":"I/O error on sda1","score":0.91,"scores":{"a disk error":0.91},"selected":true}` + "\n" +
+		`{"type":"line","file":"app.log","line":20,"text":"","scores":{},"selected":true}` + "\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// The scores go out in full: --json is read by programs, and the two decimals
+// a terminal column has room for are not what they came for.
+func TestJSONKeepsTheFullPrecision(t *testing.T) {
+	var buf bytes.Buffer
+	p := output.New(&buf, output.Options{
+		JSON: true, Meanings: []string{"m"}, Headline: headline,
+	})
+	p.Print(input.Line{File: "f.txt", Num: 1, Text: "x"}, []float64{0.123456789}, true)
+
+	if !strings.Contains(buf.String(), "0.123456789") {
+		t.Errorf("got %q, want the score as it was scored", buf.String())
+	}
+}
+
+// A line of code is full of "<" and "&", and a reader who opens the output
+// should see them: escaping them is valid JSON that nobody can read.
+func TestJSONLeavesMarkupCharactersAlone(t *testing.T) {
+	var buf bytes.Buffer
+	p := output.New(&buf, output.Options{JSON: true, Headline: headline})
+	p.Print(input.Line{File: "f.txt", Num: 1, Text: "if a < b && c > d"}, nil, true)
+
+	if !strings.Contains(buf.String(), `"if a < b && c > d"`) {
+		t.Errorf("got %q, want the text unescaped", buf.String())
+	}
+}
+
+// The whole prefix at once: -Z replaces only the separator after the file
+// name, and the score keeps its own.
+func TestScoreSitsBetweenTheNumberAndTheText(t *testing.T) {
+	tests := []struct {
+		name string
+		opts output.Options
+		want string
+	}{
+		{
+			name: "no line number: the score is the only field",
+			opts: output.Options{Score: true, Headline: headline},
+			want: "0.91:a1\n",
+		},
+		{
+			name: "with a file name and a number",
+			opts: output.Options{Filenames: output.Always, LineNumber: true, Score: true, Headline: headline},
+			want: "f1.txt:1:0.91:a1\n",
+		},
+		{
+			name: "-Z takes only the separator after the file name",
+			opts: output.Options{
+				Filenames: output.Always, LineNumber: true, Score: true, Headline: headline, Null: true,
+			},
+			want: "f1.txt\x001:0.91:a1\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			p := output.New(&buf, tt.opts)
+			p.Print(input.Line{File: "f1.txt", Num: 1, Text: "a1"}, []float64{0.91}, true)
+			if got := buf.String(); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

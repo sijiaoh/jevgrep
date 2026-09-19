@@ -1,0 +1,1 @@
+{"type":"line","file":"app.log","line":12,"text":"I/O error on sda1","score":0.91,"scores":{"a disk error":0.91,"out of memory":0.02},"selected":true}

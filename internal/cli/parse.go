@@ -48,6 +48,8 @@ type config struct {
 	// "--" group separator into existence; -A0 gives no context lines and
 	// still brings it.
 	context bool
+	score   bool
+	json    bool
 	null    bool
 	color   string
 	model   string
@@ -333,6 +335,10 @@ func interpret(cfg config, tokens []token) (config, error) {
 				return cfg, err
 			}
 			both, bothSet = n, true
+		case "score":
+			cfg.score = true
+		case "json":
+			cfg.json = true
 		case "null":
 			cfg.null = true
 		case "color":
@@ -388,6 +394,11 @@ func (cfg config) mode() mode {
 	switch {
 	case cfg.quiet:
 		return modeQuiet
+	// --json is a format, not a shape of its own: it prints a record per line,
+	// so the three modes that print something other than lines have nothing to
+	// say in it and are ignored, exactly as -n and -H are.
+	case cfg.json:
+		return modeLines
 	case cfg.fileList == withMatches:
 		return modeFilesWithMatches
 	case cfg.fileList == withoutMatch:

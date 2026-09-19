@@ -2,6 +2,8 @@
 package output
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"strconv"
 
@@ -69,6 +71,23 @@ type Options struct {
 	// separator into existence, which is exactly what grep does and the only
 	// thing this field decides.
 	Context bool
+	// Score is -p: the line's score goes between its number and its text.
+	Score bool
+	// JSON is --json, which is a format rather than a decoration: it replaces
+	// the text line entirely, and with it every field the options above shape.
+	// Which lines are printed is still the rest of the command line's business,
+	// so -A/-B/-C keep working and the context lines come out as records of
+	// their own.
+	JSON bool
+	// Meanings names the score at each index, for --json's "scores" object. It
+	// is Expr.Meanings in its own order.
+	Meanings []string
+	// Headline reduces a line's scores to the one number -p prints and --json
+	// calls "score". It comes from the caller because which of the meanings
+	// that number is taken from is the expression's business, not this
+	// package's. A run that sets Score or JSON has to set it; without it no
+	// line has a score to print.
+	Headline func([]float64) float64
 }
 
 // Printer writes jevgrep's output to a single writer. It is not safe for
@@ -80,6 +99,14 @@ type Printer struct {
 	filename bool
 	buf      []byte
 	err      error
+
+	// enc and encoded write one --json record. An encoder rather than
+	// json.Marshal, because only an encoder can be told to leave "<", ">" and
+	// "&" alone: the lines jevgrep searches are prose and code, and a "<" that
+	// came out as "\u003c" would be valid JSON nobody can read, for a benefit
+	// only an HTML page would have had.
+	enc     *json.Encoder
+	encoded bytes.Buffer
 
 	// before holds the lines that could still be printed as -B context, and
 	// after counts the lines still owed to the last selected line as -A
@@ -103,12 +130,17 @@ type Printer struct {
 // be readable while the run is still scoring later lines. What it does hold is
 // the -B lines it may still have to print, which is a bounded few.
 func New(w io.Writer, opts Options) *Printer {
-	return &Printer{
+	p := &Printer{
 		opts:     opts,
 		w:        w,
 		filename: opts.Filenames == Always || (opts.Filenames == Auto && opts.MultipleInputs),
 		before:   newRing(opts.Before),
 	}
+	if opts.JSON {
+		p.enc = json.NewEncoder(&p.encoded)
+		p.enc.SetEscapeHTML(false)
+	}
+	return p
 }
 
 // Print takes every line of the input in order, selected or not, and writes
@@ -122,14 +154,18 @@ func New(w io.Writer, opts Options) *Printer {
 // always terminated by "\n" even when the input's last line had none (grep
 // does the same).
 //
+// scores is the line's probability per Options.Meanings, or nil for a line
+// that has none: one that was never sent, or one whose batch failed. Under -p
+// such a line prints "?" rather than a number.
+//
 // l.Text goes out byte for byte -- no escaping, no color, and no trace of the
-// cleanup Line.Query does for the model.
+// cleanup Line.Query does for the model. (Under --json it cannot: see record.)
 //
 // Once a write fails Print does nothing and Err reports the first failure:
 // Print is the callback search hands every line to, so it cannot return one,
 // and a caller that keeps printing into a closed pipe would only pile up
 // identical errors.
-func (p *Printer) Print(l input.Line, selected bool) {
+func (p *Printer) Print(l input.Line, scores []float64, selected bool) {
 	// A new input starts its own context: nothing before the first line of a
 	// file may be printed as context for it, and nothing after the last line of
 	// one is owed to a match in the file before. Line numbers restart at 1, so
@@ -143,16 +179,19 @@ func (p *Printer) Print(l input.Line, selected bool) {
 
 	switch {
 	case selected:
-		for _, held := range p.before.drain() {
-			p.line(held, false)
+		for _, h := range p.before.drain() {
+			p.emit(h, false)
 		}
-		p.line(l, true)
+		p.emit(held{line: l, scores: scores}, true)
 		p.after = p.opts.After
 	case p.after > 0:
 		p.after--
-		p.line(l, false)
+		p.emit(held{line: l, scores: scores}, false)
 	default:
-		p.before.push(l)
+		// The scores are kept with the line: search hands a non-nil slice to
+		// this caller for good, so holding one back for -B costs nothing but
+		// the space it already takes.
+		p.before.push(held{line: l, scores: scores})
 	}
 }
 
@@ -188,34 +227,142 @@ func (p *Printer) Count(file string, n int) {
 	p.write()
 }
 
-// line writes one line of output, preceded by the group separator when this
-// line does not carry on from the last one printed.
-func (p *Printer) line(l input.Line, selected bool) {
+// emit writes one line of output in whichever format was asked for, preceded
+// by the group separator when it does not carry on from the last one printed.
+func (p *Printer) emit(h held, selected bool) {
 	if p.err != nil {
 		return
 	}
-	if p.opts.Context && p.printed && (l.File != p.lastFile || l.Num != p.lastNum+1) {
+	// The separator says "lines were left out here", which is a thing to say
+	// in a column of text. A stream of JSON records carries the line numbers
+	// in the records themselves, and a line of "--" in it would not even parse.
+	if !p.opts.JSON && p.opts.Context && p.printed && (h.line.File != p.lastFile || h.line.Num != p.lastNum+1) {
 		p.buf = p.buf[:0]
 		p.buf = p.appendColored(p.buf, colorSeparator, "--")
 		p.buf = append(p.buf, '\n')
 		p.write()
 	}
-	p.lastFile, p.lastNum, p.printed = l.File, l.Num, true
+	p.lastFile, p.lastNum, p.printed = h.line.File, h.line.Num, true
 
+	if p.opts.JSON {
+		p.record(h, selected)
+		return
+	}
+	p.line(h, selected)
+}
+
+// line writes one line of jevgrep's text output.
+func (p *Printer) line(h held, selected bool) {
 	// Assembled first and written once, so that a line reaches the pipe whole
 	// rather than in pieces, and nothing is held back after it: output is read
 	// live, as the scores come in.
 	p.buf = p.buf[:0]
 	if p.filename {
-		p.buf = p.appendFile(p.buf, l.File)
+		p.buf = p.appendFile(p.buf, h.line.File)
 		p.buf = p.appendFileSeparator(p.buf, selected)
 	}
 	if p.opts.LineNumber {
-		p.buf = p.appendColored(p.buf, colorNumber, strconv.Itoa(l.Num))
+		p.buf = p.appendColored(p.buf, colorNumber, strconv.Itoa(h.line.Num))
 		p.buf = p.appendSeparator(p.buf, selected)
 	}
-	p.buf = append(p.buf, l.Text...)
+	if p.opts.Score {
+		// Colored like the line number: both are what the line is, printed in
+		// front of what the line says.
+		p.buf = p.appendColored(p.buf, colorNumber, p.scoreText(h.scores))
+		p.buf = p.appendSeparator(p.buf, selected)
+	}
+	p.buf = append(p.buf, h.line.Text...)
 	p.buf = append(p.buf, '\n')
+	p.write()
+}
+
+// noScore is what -p prints for a line that has none: a blank line, which was
+// never sent, or a line whose batch failed. One character, and not one that
+// could be read as a number or confused with the "-" separator.
+//
+// A blank line is decided as a zero, but that zero is a stand-in this program
+// put there, not something the model was asked. Printing it as 0.00 would be
+// inventing an answer from the API, in the one column a user would take at
+// face value.
+const noScore = "?"
+
+// scoreText is the score as -p writes it: always four characters, 0.00 to
+// 1.00. The fixed width is not for alignment -- file names and line numbers
+// are not aligned either -- but so that the field is one shape: golden output
+// stays stable, and `awk -F: '$2 > 0.9'` is not tripped up by a column that is
+// sometimes "1" and sometimes "1.0".
+func (p *Printer) scoreText(scores []float64) string {
+	s, ok := p.score(scores)
+	if !ok {
+		return noScore
+	}
+	return strconv.FormatFloat(s, 'f', 2, 64)
+}
+
+// score is the one number -p and --json report for a line, and whether the
+// line has one at all.
+func (p *Printer) score(scores []float64) (float64, bool) {
+	if scores == nil || p.opts.Headline == nil {
+		return 0, false
+	}
+	return p.opts.Headline(scores), true
+}
+
+// record is one line of --json output. The field order is this declaration's,
+// which is what makes the output golden-testable.
+type record struct {
+	// Type is always "line". It is there so that the stats record --stats will
+	// add has somewhere to say that it is not a line, without the readers
+	// written today having to guess.
+	Type string `json:"type"`
+	File string `json:"file"`
+	Line int    `json:"line"`
+	// Text is the one place jevgrep's output is not the input byte for byte:
+	// JSON is UTF-8, so a byte that is not valid UTF-8 becomes U+FFFD here.
+	// That is JSON's limit, not a cleanup -- what Line.Query does for the model
+	// still never reaches the output.
+	Text string `json:"text"`
+	// Score is the number -p prints, absent on a line that has none.
+	Score *float64 `json:"score,omitempty"`
+	// Scores is every meaning's probability, empty on a line that has none.
+	// Full precision on purpose: JSON is read by programs, and rounding it to
+	// what a terminal column can show would throw away what they came for.
+	Scores map[string]float64 `json:"scores"`
+	// Selected is false only on a context line.
+	Selected bool `json:"selected"`
+}
+
+func (p *Printer) record(h held, selected bool) {
+	rec := record{
+		Type:     "line",
+		File:     h.line.File,
+		Line:     h.line.Num,
+		Text:     h.line.Text,
+		Scores:   map[string]float64{},
+		Selected: selected,
+	}
+	// Indexed by Meanings, which is the contract Print states: a slice of a
+	// different length is a caller that scored a different expression, and
+	// this is not the place to paper over that with a record missing a
+	// meaning nobody would notice was gone.
+	if h.scores != nil {
+		for i, meaning := range p.opts.Meanings {
+			rec.Scores[meaning] = h.scores[i]
+		}
+	}
+	if s, ok := p.score(h.scores); ok {
+		rec.Score = &s
+	}
+
+	p.encoded.Reset()
+	// The only error an encoder can return here is the writer's, and this one
+	// is a buffer: record holds nothing json cannot encode.
+	if err := p.enc.Encode(rec); err != nil {
+		p.err = err
+		return
+	}
+	// Encode has already put the newline on.
+	p.buf = append(p.buf[:0], p.encoded.Bytes()...)
 	p.write()
 }
 
@@ -268,31 +415,38 @@ func (p *Printer) write() {
 // rather than claiming a clean run whose output never arrived.
 func (p *Printer) Err() error { return p.err }
 
+// held is a line together with what the model said about it, which is what
+// -p and --json print and therefore what the -B buffer has to keep.
+type held struct {
+	line   input.Line
+	scores []float64
+}
+
 // ring holds the last -B lines read, so that a selected line can be given the
 // context that came before it. It is a fixed array because the lines it holds
 // are the only ones the output side keeps, and that number has to stay the one
 // the user asked for.
 type ring struct {
-	buf   []input.Line
+	buf   []held
 	start int
 	n     int
 	// out is reused by drain, whose result the caller only reads before the
 	// next push.
-	out []input.Line
+	out []held
 }
 
 func newRing(size int) ring {
 	if size <= 0 {
 		return ring{}
 	}
-	return ring{buf: make([]input.Line, size), out: make([]input.Line, 0, size)}
+	return ring{buf: make([]held, size), out: make([]held, 0, size)}
 }
 
-func (r *ring) push(l input.Line) {
+func (r *ring) push(h held) {
 	if len(r.buf) == 0 {
 		return
 	}
-	r.buf[(r.start+r.n)%len(r.buf)] = l
+	r.buf[(r.start+r.n)%len(r.buf)] = h
 	if r.n < len(r.buf) {
 		r.n++
 		return
@@ -302,7 +456,7 @@ func (r *ring) push(l input.Line) {
 
 // drain returns the held lines oldest first and empties the ring: a line is
 // printed as context once, and a later selected line must not print it again.
-func (r *ring) drain() []input.Line {
+func (r *ring) drain() []held {
 	r.out = r.out[:0]
 	for i := range r.n {
 		r.out = append(r.out, r.buf[(r.start+i)%len(r.buf)])

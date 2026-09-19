@@ -64,6 +64,8 @@ var Options = []Option{
 	{Short: "A", Long: "after-context", Arg: "NUM", Summary: "Print NUM lines after each matching line"},
 	{Short: "B", Long: "before-context", Arg: "NUM", Summary: "Print NUM lines before each matching line"},
 	{Short: "C", Long: "context", Arg: "NUM", Summary: "Print NUM lines before and after each matching line"},
+	{Short: "p", Long: "score", Summary: "Print each line's score before its text"},
+	{Long: "json", Summary: "Print one JSON object per line of output"},
 	{Short: "Z", Long: "null", Summary: "Terminate each file name with a NUL byte"},
 	{Long: "color", Arg: "WHEN", ArgOptional: true, Summary: "Color output: always, never, auto", Default: colorAuto},
 	{Long: "model", Arg: "NAME", Summary: "Model that scores the lines", Default: jev.DefaultModel},

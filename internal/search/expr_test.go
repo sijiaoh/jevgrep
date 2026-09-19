@@ -204,3 +204,62 @@ func mustCompile(t *testing.T, terms []Term, threshold float64, invert bool) *Ex
 	}
 	return e
 }
+
+// Headline is the one number -p prints, and which of the scores it comes from
+// is the whole of what it decides.
+func TestHeadlineIsTheBestOfTheHeadMeanings(t *testing.T) {
+	tests := []struct {
+		name   string
+		terms  []Term
+		invert bool
+		scores []float64
+		want   float64
+	}{
+		{
+			name:   "one meaning is its own headline",
+			terms:  []Term{{Meaning: "a"}},
+			scores: []float64{0.91},
+			want:   0.91,
+		},
+		{
+			name:   "two -e report the higher one",
+			terms:  []Term{{Meaning: "a"}, {Meaning: "b"}},
+			scores: []float64{0.2, 0.7},
+			want:   0.7,
+		},
+		{
+			name:   "whichever order they came in",
+			terms:  []Term{{Meaning: "a"}, {Meaning: "b"}},
+			scores: []float64{0.7, 0.2},
+			want:   0.7,
+		},
+		{
+			// --and and --not qualify a branch; they are not what the user
+			// asked to see, and --json is where every number is.
+			name:   "--and and --not are left out",
+			terms:  []Term{{Meaning: "a", And: []string{"b"}, Not: []string{"c"}}},
+			scores: []float64{0.4, 0.99, 0.98},
+			want:   0.4,
+		},
+		{
+			// -v turns the verdict over, not the measurement behind it.
+			name:   "-v does not change it",
+			terms:  []Term{{Meaning: "a"}},
+			invert: true,
+			scores: []float64{0.91},
+			want:   0.91,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr, err := Compile(tt.terms, 0.5, tt.invert)
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			if got := expr.Headline(tt.scores); got != tt.want {
+				t.Errorf("Headline = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

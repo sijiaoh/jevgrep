@@ -1,0 +1,3 @@
+{"type":"line","file":"app.log","line":11,"text":"starting up","score":0.04,"scores":{"a disk error":0.04},"selected":false}
+{"type":"line","file":"app.log","line":12,"text":"I/O error on sda1","score":0.91,"scores":{"a disk error":0.91},"selected":true}
+{"type":"line","file":"app.log","line":13,"text":"retrying","score":0.11,"scores":{"a disk error":0.11},"selected":false}

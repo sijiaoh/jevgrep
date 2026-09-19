@@ -128,3 +128,22 @@ func (t term) holds(scores []float64, threshold float64) bool {
 	}
 	return true
 }
+
+// Headline reduces a line's scores to the single number -p prints and --json
+// reports as "score": the highest of the head meanings' scores, one per OR
+// branch. The --and and --not meanings are left out because they qualify a
+// branch rather than being what the user asked to see, and -v does not change
+// it either -- inverting happens to the verdict, not to what the model
+// measured. Anyone who needs every number asks for --json, which is what it is
+// for.
+//
+// scores must have one entry per Meanings, like Match's.
+func (e *Expr) Headline(scores []float64) float64 {
+	// Compile refuses an expression with no term, so there is always a head
+	// meaning to report.
+	best := scores[e.terms[0].all[0]]
+	for _, t := range e.terms[1:] {
+		best = max(best, scores[t.all[0]])
+	}
+	return best
+}

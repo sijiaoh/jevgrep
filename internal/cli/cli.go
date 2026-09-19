@@ -162,6 +162,10 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		Before:         cfg.before,
 		After:          cfg.after,
 		Context:        cfg.context,
+		Score:          cfg.score,
+		JSON:           cfg.json,
+		Meanings:       expr.Meanings(),
+		Headline:       expr.Headline,
 	})
 
 	ctx, stop := interruptible(context.Background())
