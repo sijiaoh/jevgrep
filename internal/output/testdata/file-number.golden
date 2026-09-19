@@ -1,0 +1,8 @@
+notes.txt:1:a plain line
+notes.txt:2:kept CR at the end
+notes.txt:3:  leading space and a : colon
+notes.txt:4:
+odd:name.txt:12:the file name has a colon
+bytes.bin:120:not UTF-8: ÿþ here
+(standard input):7:read from standard input
+notes.txt:1234:the last line, with no newline of its own

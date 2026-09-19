@@ -1,0 +1,8 @@
+1:a plain line
+2:kept CR at the end
+3:  leading space and a : colon
+4:
+12:the file name has a colon
+120:not UTF-8: ÿþ here
+7:read from standard input
+1234:the last line, with no newline of its own

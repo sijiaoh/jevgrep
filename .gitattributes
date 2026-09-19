@@ -4,3 +4,9 @@
 # unformatted, so without this the Windows CI job would fail lint on files that
 # are correct on every other platform.
 * text=auto eol=lf
+
+# Golden files are compared byte for byte and deliberately contain CR bytes and
+# bytes that are not UTF-8. Git's text heuristic sees them as text (it only
+# looks for NUL), so without this the rule above would rewrite a golden's CRLF
+# into LF and the test it feeds would fail on a fresh clone.
+**/testdata/*.golden -text

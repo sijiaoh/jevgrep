@@ -1,0 +1,8 @@
+a plain line
+kept CR at the end
+  leading space and a : colon
+
+the file name has a colon
+not UTF-8: ÿþ here
+read from standard input
+the last line, with no newline of its own
