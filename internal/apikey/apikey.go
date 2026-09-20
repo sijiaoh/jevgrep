@@ -21,7 +21,7 @@ const EnvVar = "TYPESAFE_API_KEY"
 
 // SignupURL is where a user without a key gets one. The CLI shows it in the
 // "no API key" hint; it lives here so the hint and --login cannot drift.
-const SignupURL = "https://console.typesafe.ai/settings/keys"
+const SignupURL = "https://console.typesafe.ai/keys"
 
 const (
 	// configHomeEnvVar is the XDG variable. It is honored everywhere, so it is

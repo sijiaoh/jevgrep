@@ -82,14 +82,14 @@ files kept in this repository so that the output shown here is reproducible. Clo
 to follow along, or point them at a log of your own — nothing depends on the fixture
 except the exact lines that come back.
 
-**1. Get a key.** jevgrep talks to the [TypeSafe](https://console.typesafe.ai/settings/keys)
+**1. Get a key.** jevgrep talks to the [TypeSafe](https://console.typesafe.ai/keys)
 API, and needs a key of your own.
 
 <!-- demo: skip: this block prompts for a key, so `make demo` cannot rerun it -->
 
 ```console
 $ jevgrep --login
-jevgrep: paste a key from https://console.typesafe.ai/settings/keys (it will not be echoed)
+jevgrep: paste a key from https://console.typesafe.ai/keys (it will not be echoed)
 TypeSafe API key: 
 jevgrep: key saved to /home/you/.config/jevgrep/api_key
 ```

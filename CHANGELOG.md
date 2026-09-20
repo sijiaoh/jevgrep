@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the version is 0.x, command line options and the `--json` fields may
 change in a minor release.
 
+## [Unreleased]
+
+### Fixed
+
+- `--login` and the "no API key" hint pointed at a TypeSafe console page that
+  does not issue keys; both now name the one that does.
+
 ## [0.1.0] - 2026-09-20
 
 First release.
@@ -41,4 +48,5 @@ First release.
 - An `install.sh` that downloads the right archive for the machine, checks it
   against the release's checksums and installs the binary.
 
+[Unreleased]: https://github.com/sijiaoh/jevgrep/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/sijiaoh/jevgrep/releases/tag/v0.1.0
