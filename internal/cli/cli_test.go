@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -266,9 +267,25 @@ func TestAnUnreadableFileIsReportedAndTheRestIsSearched(t *testing.T) {
 	if !strings.Contains(got.stdout, "ERROR disk full") {
 		t.Errorf("stdout = %q, want the other file to have been searched", got.stdout)
 	}
-	want := "jevgrep: " + missing + ": no such file or directory\n"
+	// The reason is the system's own words, and they differ by platform:
+	// Windows says "The system cannot find the file specified." where Unix
+	// says "no such file or directory", so an errno string written down here
+	// would assert which machine the test runs on and nothing else. Read from
+	// the system, it keeps the comparison exact -- which is also what rules
+	// out a searched line or the key riding along in the message.
+	var pathErr *fs.PathError
+	if _, err := os.Open(missing); !errors.As(err, &pathErr) {
+		t.Fatalf("opening %s: err = %v, want a *fs.PathError to read the system's words from", missing, err)
+	}
+	prefix := "jevgrep: " + missing + ": "
+	want := prefix + pathErr.Err.Error() + "\n"
 	if got.stderr != want {
 		t.Errorf("stderr = %q, want %q", got.stderr, want)
+	}
+	// A path on its own is not a report: whatever the system calls this, the
+	// user is told why the file could not be read.
+	if len(got.stderr) <= len(prefix)+len("\n") {
+		t.Errorf("stderr = %q, want the path and then a reason for it", got.stderr)
 	}
 }
 

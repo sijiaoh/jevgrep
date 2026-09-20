@@ -358,20 +358,27 @@ func record(k [keySize]byte, score float64, day uint32) []byte {
 // append adds records to a shard, emptying it first if it has grown past its
 // budget. The caller holds c.mu.
 func (c *Cache) append(shard int, data []byte) {
-	f, err := os.OpenFile(c.path(shard), os.O_WRONLY|os.O_CREATE|os.O_APPEND, cacheFileMode)
-	if err != nil {
-		return
-	}
-	defer func() { _ = f.Close() }()
+	flag := os.O_WRONLY | os.O_CREATE | os.O_APPEND
 
-	if info, err := f.Stat(); err == nil && info.Size()+int64(len(data)) > maxShardBytes {
-		if err := f.Truncate(0); err != nil {
-			return
-		}
+	// An overfull shard is emptied by reopening it truncated, not by
+	// truncating the handle that is about to append to it: Windows grants an
+	// O_APPEND handle every write right except FILE_WRITE_DATA, and moving
+	// the end of a file needs exactly that one, so f.Truncate fails there
+	// with a permission error -- leaving a shard that can be neither emptied
+	// nor appended to, which would stop remembering anything at all, for
+	// good, the first time it filled up.
+	if info, err := os.Stat(c.path(shard)); err == nil && info.Size()+int64(len(data)) > maxShardBytes {
+		flag = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 		// What is on disk is gone, so what is in memory has to go too, or the
 		// next run would be told about answers no longer written down.
 		c.loaded[shard] = nil
 	}
+
+	f, err := os.OpenFile(c.path(shard), flag, cacheFileMode)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
 
 	// Written in small pieces so that each one is a single indivisible append:
 	// other jevgrep processes may be appending to this very file, and there is
