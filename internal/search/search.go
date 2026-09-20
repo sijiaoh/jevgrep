@@ -12,9 +12,10 @@ import (
 )
 
 // defaultConcurrency is how many requests are kept in flight. The work is
-// entirely network-bound -- a batch of 30 lines answers in about a second (§2)
-// -- so the number is a throughput knob, not a CPU one: eight keeps a few
-// hundred lines a second moving without looking to the server like a flood.
+// entirely network-bound -- a full batch answers in well under a second
+// (measured by `make calibrate`) -- so the number is a throughput knob, not a
+// CPU one: eight keeps upwards of a thousand lines a second moving without
+// looking to the server like a flood.
 // -j/--jobs, which lets the user pick, is a later milestone; Options.Concurrency
 // is the seam it will plug into.
 const defaultConcurrency = 8
@@ -94,6 +95,16 @@ type Options struct {
 	// lines that would otherwise be sent: one with nothing to ask about is
 	// already free.
 	Skip func(input.Line) bool
+	// Cached reports a probability the caller already has for asking meaning
+	// of query, so that the question never enters a batch. Same intent as
+	// Skip: a question nobody has to pay for is a question nobody has to wait
+	// for either -- and since batches are cut before they are sent, answering
+	// here is what makes a cache save requests and not merely tokens.
+	//
+	// A line answered this way is decided like any other: it keeps its scores
+	// and is indistinguishable downstream from one the model just scored. It
+	// is called on the reader's goroutine, once per meaning per line.
+	Cached func(meaning, query string) (float64, bool)
 	// Fail receives every batch that could not be scored, in line order. A
 	// line is in one batch per meaning, so a run that asks two things of the
 	// same line can report it twice -- two requests failed, and both were
@@ -110,6 +121,7 @@ type Searcher struct {
 	emit        func(input.Line, Verdict, []float64)
 	fail        func(Failure)
 	skip        func(input.Line) bool
+	cached      func(string, string) (float64, bool)
 }
 
 // New returns a Searcher that scores lines with scorer and decides them with
@@ -122,6 +134,7 @@ func New(scorer Scorer, expr *Expr, opts Options) *Searcher {
 		emit:        opts.Emit,
 		fail:        opts.Fail,
 		skip:        opts.Skip,
+		cached:      opts.Cached,
 	}
 	if s.concurrency < 1 {
 		s.concurrency = defaultConcurrency
@@ -222,6 +235,13 @@ type run struct {
 	// is the sequence number of records[0].
 	records []*record
 	head    int
+
+	// batch and at are dispatch's working slices, kept here and reused rather
+	// than allocated: dispatch runs once per line read. They belong to the
+	// reader's goroutine alone, and score copies what it needs out of them
+	// before it returns.
+	batch []queued
+	at    []int
 }
 
 // record is a line waiting for its verdict.
@@ -266,6 +286,11 @@ type event struct {
 	seq     int
 	scored  bool
 	skipped bool
+	// cached holds the answers that were already known, by meaning index, and
+	// need marks the meanings still to be asked. Both are nil when nothing was
+	// known, which is the common case and the one that allocates nothing.
+	cached []float64
+	need   []bool
 
 	// seqs are the records a finished batch covers, in request order, and
 	// meaning is which meaning it was scored against (kindScores, kindFailed).
@@ -289,6 +314,14 @@ func (r *run) handle(ev event) error {
 		if ev.scored {
 			rec.score = make([]float64, len(r.meanings))
 			rec.pending = len(r.meanings)
+			// A cached answer lands exactly where the model's would have, so
+			// a line whose every meaning was known is already decided here.
+			for i, need := range ev.need {
+				if !need {
+					rec.score[i] = ev.cached[i]
+					rec.pending--
+				}
+			}
 		}
 		r.records = append(r.records, rec)
 
@@ -365,7 +398,12 @@ type queued struct {
 	seq   int
 	line  input.Line
 	query string
+	// need marks the meanings this line still has to be asked about. A nil
+	// need means all of them.
+	need []bool
 }
+
+func (q queued) needs(meaning int) bool { return q.need == nil || q.need[meaning] }
 
 // read pulls the input and dispatches batches, announcing every line to Run's
 // loop as it goes so that the loop can put results back in order.
@@ -387,16 +425,23 @@ func (r *run) read(lines iter.Seq[input.Line]) {
 		if scored && r.skip(line) {
 			scored, skipped = false, true
 		}
+		var cached []float64
+		var need []bool
+		if scored {
+			cached, need = r.recall(query)
+		}
 		if !r.reserve(&buf, sent) {
 			done = true
 			return false
 		}
-		if !r.send(event{kind: kindLine, line: line, seq: seq, scored: scored, skipped: skipped}) {
+		if !r.send(event{kind: kindLine, line: line, seq: seq, scored: scored, skipped: skipped, cached: cached, need: need}) {
 			done = true
 			return false
 		}
-		if scored {
-			buf = append(buf, queued{seq: seq, line: line, query: query})
+		// A line with nothing left to ask never enters a batch, which is the
+		// whole point of asking before the split rather than after it.
+		if scored && (need == nil || slices.Contains(need, true)) {
+			buf = append(buf, queued{seq: seq, line: line, query: query, need: need})
 			if !r.dispatch(&buf, sent, false) {
 				done = true
 				return false
@@ -409,6 +454,32 @@ func (r *run) read(lines iter.Seq[input.Line]) {
 	if !done {
 		r.dispatch(&buf, sent, true)
 	}
+}
+
+// recall asks the caller which of the meanings it already has an answer for.
+// It returns nil, nil when it has none, so that the usual line costs no
+// allocation and dispatch can read a nil need as "ask about everything".
+func (r *run) recall(query string) ([]float64, []bool) {
+	if r.cached == nil {
+		return nil, nil
+	}
+	var cached []float64
+	var need []bool
+	for i, meaning := range r.meanings {
+		score, ok := r.cached(meaning, query)
+		if !ok {
+			continue
+		}
+		if need == nil {
+			cached = make([]float64, len(r.meanings))
+			need = make([]bool, len(r.meanings))
+			for j := range need {
+				need[j] = true
+			}
+		}
+		cached[i], need[i] = score, false
+	}
+	return cached, need
 }
 
 // reserve takes this line's place in the queue of undecided lines, waiting
@@ -442,7 +513,17 @@ func (r *run) reserve(buf *[]queued, sent []int) bool {
 // in it, and sending a half-full batch costs an extra request.
 func (r *run) dispatch(buf *[]queued, sent []int, final bool) bool {
 	for i, meaning := range r.meanings {
-		waiting := (*buf)[sent[i]:]
+		// Only the lines this meaning still has to ask about: one whose answer
+		// was already known must not take up room in a batch, or the cache
+		// would save money without saving a single request.
+		waiting, at := r.batch[:0], r.at[:0]
+		for j := sent[i]; j < len(*buf); j++ {
+			if (*buf)[j].needs(i) {
+				waiting = append(waiting, (*buf)[j])
+				at = append(at, j)
+			}
+		}
+		r.batch, r.at = waiting, at
 		chunks := jev.Split(meaning, queries(waiting))
 		if !final {
 			chunks = chunks[:max(len(chunks)-1, 0)]
@@ -452,8 +533,19 @@ func (r *run) dispatch(buf *[]queued, sent []int, final bool) bool {
 				return false
 			}
 		}
-		if n := len(chunks); n > 0 {
-			sent[i] += chunks[n-1].Offset + len(chunks[n-1].Lines)
+		// Everything up to the first line still owed to this meaning is done
+		// with, including the lines it never had to ask about.
+		switch n := len(chunks); {
+		case n > 0:
+			if end := chunks[n-1].Offset + len(chunks[n-1].Lines); end < len(waiting) {
+				sent[i] = at[end]
+			} else {
+				sent[i] = len(*buf)
+			}
+		case len(at) > 0:
+			sent[i] = at[0]
+		default:
+			sent[i] = len(*buf)
 		}
 	}
 

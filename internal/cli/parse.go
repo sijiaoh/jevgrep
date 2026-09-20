@@ -52,6 +52,9 @@ type config struct {
 	json    bool
 	null    bool
 	color   string
+	dryRun  bool
+	stats   bool
+	noCache bool
 	model   string
 
 	// The three options that do something instead of searching. They are read
@@ -353,6 +356,12 @@ func interpret(cfg config, tokens []token) (config, error) {
 			default:
 				return cfg, usageErrorf("--color: not %s, %s or %s: %q", colorAlways, colorNever, colorAuto, t.text)
 			}
+		case "dry-run":
+			cfg.dryRun = true
+		case "stats":
+			cfg.stats = true
+		case "no-cache":
+			cfg.noCache = true
 		case "model":
 			cfg.model = t.text
 		}
@@ -407,6 +416,19 @@ func (cfg config) mode() mode {
 		return modeCount
 	}
 	return modeLines
+}
+
+// stopsEarly reports that this command line can leave a file half read: -q
+// stops the whole run at the first match, -l stops a file at its first match,
+// and -m stops it at its last allowed one. That is what makes a dry run of
+// such a run an upper bound -- where the matches are is precisely what nobody
+// knows before anything has been sent.
+//
+// -L is not one of them, whatever it looks like: it has to read every file to
+// the end to be able to say that nothing in it matched. -m 0 is not either;
+// it reads nothing at all, which is exact.
+func (cfg config) stopsEarly() bool {
+	return cfg.quiet || cfg.mode() == modeFilesWithMatches || cfg.maxCount > 0
 }
 
 // mode is one of the shapes jevgrep's output takes.

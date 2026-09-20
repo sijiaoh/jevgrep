@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"time"
 
 	"github.com/sijiaoh/jevgrep/internal/apikey"
 	"github.com/sijiaoh/jevgrep/internal/buildinfo"
+	"github.com/sijiaoh/jevgrep/internal/cache"
 	"github.com/sijiaoh/jevgrep/internal/input"
 	"github.com/sijiaoh/jevgrep/internal/jev"
 	"github.com/sijiaoh/jevgrep/internal/output"
@@ -44,6 +46,10 @@ type environment struct {
 	// baseURL overrides the API root, so tests can point at a local server.
 	// There is no option for it.
 	baseURL string
+	// now is the clock --stats times the run with. It is here so that a test
+	// can assert the whole report, elapsed line and all, without waiting for
+	// anything. run fills it in when the caller left it nil.
+	now func() time.Time
 }
 
 // Run executes jevgrep with the given arguments (excluding the program name)
@@ -55,6 +61,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func run(env environment, args []string, stdout, stderr io.Writer) int {
+	if env.now == nil {
+		env.now = time.Now
+	}
 	cfg, err := parse(args)
 	switch {
 	// These three outrank each other in this order and ignore the rest of the
@@ -141,13 +150,41 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		paths = []string{input.StdinPath}
 	}
 
+	if cfg.dryRun {
+		return dryRun(env, cfg, expr, paths, stdout, stderr)
+	}
+
 	key, err := apikey.Load()
 	if err != nil {
 		return keyFailure(stderr, err)
 	}
-	client, err := jev.New(jev.Config{APIKey: key, Model: cfg.model, BaseURL: env.baseURL})
+	// The meter exists only for --stats. Without it nothing here counts
+	// anything, which is what keeps a plain run free of the bookkeeping.
+	var m *meter
+	if cfg.stats {
+		m = &meter{}
+	}
+
+	client, err := jev.New(jev.Config{
+		APIKey:    key,
+		Model:     cfg.model,
+		BaseURL:   env.baseURL,
+		OnAttempt: attemptObserver(m),
+	})
 	if err != nil {
 		return failure(stderr, "%s", err)
+	}
+
+	scorer, recall, cacheUsed, closeCache := scoring(cfg, client)
+	// Registered before the context's cancel, so it runs after it: the run is
+	// torn down first, and then the cache is shut so that nothing it left in
+	// flight can write a file once grep has returned.
+	defer closeCache()
+	if m != nil {
+		scorer = meteringScorer{next: scorer, meter: m}
+		// Installed even without a cache to ask: the count of questions is the
+		// count of what was paid for, and it is taken where they are asked.
+		recall = m.recall(recall)
 	}
 
 	// Unbuffered on purpose: output.Printer writes whole lines straight
@@ -182,11 +219,7 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		opened:    files,
 		quotas:    quotas,
 		recursive: cfg.recursive,
-		walkOpts: walk.Options{
-			Globs:    cfg.globs,
-			Hidden:   cfg.hidden,
-			NoIgnore: cfg.noIgnore,
-		},
+		walkOpts:  walkOptions(cfg),
 	}
 	out := &sink{
 		mode:     cfg.mode(),
@@ -202,8 +235,9 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		out.after = cfg.after
 	}
 	var fatal bool
-	searcher := search.New(client, expr, search.Options{
-		Emit: out.line,
+	searcher := search.New(scorer, expr, search.Options{
+		Emit:   out.line,
+		Cached: recall,
 		// The reader is asked about the file it is reading, not about the
 		// line: this runs on the reader's own goroutine, inside the yield of
 		// the line it is being asked about, which is what makes a plain field
@@ -228,7 +262,15 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		},
 	})
 
-	runErr := searcher.Run(ctx, r.lines(paths))
+	lines := r.lines(paths)
+	if m != nil {
+		lines = m.watch(lines)
+	}
+
+	start := env.now()
+	runErr := searcher.Run(ctx, lines)
+	elapsed := env.now().Sub(start)
+	var interrupted bool
 	var authErr *jev.AuthError
 	switch {
 	// Already reported, and the cancel it triggered is what Run returns.
@@ -243,8 +285,10 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 			log.printf("the API key was rejected (HTTP %d); run `jevgrep --login` to store a new one", authErr.StatusCode)
 		}
 	case errors.Is(runErr, context.Canceled):
-		// Whatever was printed before the interrupt stays printed.
-		return ExitInterrupt
+		// Whatever was printed before the interrupt stays printed. The exit
+		// code waits until the end all the same: the run still owes --stats a
+		// report of what it spent before it was stopped.
+		interrupted = true
 	case runErr != nil:
 		log.printf("%s", reason(runErr))
 	// Every file was read to its end, so -c and -L can say what each of them
@@ -254,9 +298,22 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		out.done()
 	}
 
-	// The output may have failed silently: Print has no way to report it.
-	if err := printer.Err(); err != nil {
+	// The output may have failed silently: Print has no way to report it. An
+	// interrupted run says nothing about it: the batches Ctrl-C tore down are
+	// not news, and neither is a half-written line.
+	if err := printer.Err(); err != nil && !interrupted {
 		log.printf("could not write the output: %s", osReason(err))
+	}
+
+	// However the run ended -- finished, part failed, key rejected, Ctrl-C --
+	// the money is spent, and the moment a user most needs to know how much is
+	// the moment the run did not finish. Failing to print it does not change
+	// the exit code: the search is what was asked for, the report is not.
+	if m != nil {
+		log.report(m.report(files.count(), elapsed, cacheUsed))
+	}
+	if interrupted {
+		return ExitInterrupt
 	}
 
 	switch {
@@ -274,6 +331,70 @@ func grep(env environment, cfg config, stdout, stderr io.Writer) int {
 		return ExitMatch
 	}
 	return ExitNoMatch
+}
+
+// scoring returns what scores the lines, what already knows some of the
+// answers, what became of the cache, and how to shut it. Without a cache the
+// client scores on its own and nothing knows an answer in advance, which is
+// the shape --no-cache asks for.
+//
+// The returned func closes the cache; it is never nil, so the caller can defer
+// it without asking whether there was a cache at all.
+func scoring(cfg config, client *jev.Client) (search.Scorer, func(meaning, query string) (float64, bool), cacheState, func()) {
+	c, state := openCache(cfg, cache.Open)
+	if c == nil {
+		return client, nil, state, func() {}
+	}
+	return c.Wrap(client), c.Lookup, state, c.Close
+}
+
+// lookup is what a dry run needs of the cache: the answers it already has, and
+// nothing that would write one -- not even the directory, which is why it
+// opens the cache the other way round.
+func lookup(cfg config) (func(meaning, query string) (float64, bool), cacheState) {
+	c, state := openCache(cfg, cache.OpenForReading)
+	if c == nil {
+		return nil, state
+	}
+	return c.Lookup, state
+}
+
+func openCache(cfg config, open func(string) (*cache.Cache, error)) (*cache.Cache, cacheState) {
+	if cfg.noCache {
+		return nil, cacheState{off: true}
+	}
+	// Where it would be is worked out apart from opening it, so that --stats
+	// can name the directory it could not use.
+	dir, _ := cache.Dir()
+	c, err := open(cfg.model)
+	// A cache that cannot be opened is not worth a word to the user: the
+	// search is the same search, it just costs what it did last time, and a
+	// warning repeated on every run would be noise about something nobody
+	// asked for. Only --stats says so, where it was asked.
+	if err != nil {
+		return nil, cacheState{dir: dir}
+	}
+	return c, cacheState{dir: dir, on: true}
+}
+
+// walkOptions is which files a walk will search, as both the search and the
+// dry run ask for it: a dry run that priced a different set of files than the
+// run it is predicting would be worse than no dry run.
+func walkOptions(cfg config) walk.Options {
+	return walk.Options{
+		Globs:    cfg.globs,
+		Hidden:   cfg.hidden,
+		NoIgnore: cfg.noIgnore,
+	}
+}
+
+// attemptObserver is what the client tells the meter about every request it
+// sends. Nil without --stats, so that a plain run carries no callback at all.
+func attemptObserver(m *meter) func(jev.Attempt) {
+	if m == nil {
+		return nil
+	}
+	return m.attempt
 }
 
 // colorEnabled turns --color into the yes or no the printer wants. "auto" asks
@@ -472,6 +593,16 @@ func (l *errorLog) notice(format string, a ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	fmt.Fprintf(l.w, "jevgrep: "+format+"\n", a...)
+}
+
+// report prints a block that is neither a complaint nor part of the results:
+// the --stats table, under the same "jevgrep: " prefix as everything else on
+// stderr so that it cannot be mistaken for output. It takes the lock because
+// the reader goroutine can still be reporting a read error as this is written.
+func (l *errorLog) report(body string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	fmt.Fprint(l.w, "jevgrep: stats\n"+body)
 }
 
 func (l *errorLog) failed() bool {

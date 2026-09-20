@@ -1,0 +1,10 @@
+dry run: nothing was sent
+  files                 4
+  lines read           11
+  blank                 0  never sent
+  questions            11  1 meaning per line
+  cached                0  already scored
+  to send              11
+  batches              ~1
+  input tokens       ~478
+  cost         ~$0.000020  at $0.042 per 1M input tokens

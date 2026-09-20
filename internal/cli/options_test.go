@@ -37,7 +37,7 @@ func TestHelpRendersEveryOption(t *testing.T) {
 // The options jevgrep does not have yet must not be advertised: a summary is a
 // promise, and the milestone that adds one is the milestone that may name it.
 func TestHelpPromisesNothingUnimplemented(t *testing.T) {
-	for _, long := range []string{"stats", "jobs", "dry-run"} {
+	for _, long := range []string{"jobs"} {
 		if longOption(long) != nil {
 			t.Errorf("the option table has --%s, which jevgrep does not have", long)
 		}

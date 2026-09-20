@@ -54,6 +54,24 @@ type Config struct {
 	// RetryBackoff is the delay before the second attempt; it doubles after
 	// each further failure, with jitter, up to a cap.
 	RetryBackoff time.Duration
+
+	// OnAttempt, when set, hears about every HTTP request this client sends,
+	// retries included. It is the only way out of here for what a request
+	// actually cost, which is what --stats reports: the API's own count is the
+	// bill, and everything else jevgrep has is an estimate.
+	//
+	// It is called from the goroutine that made the request, so an
+	// implementation must be safe for concurrent use.
+	OnAttempt func(Attempt)
+}
+
+// Attempt is one HTTP request a Client sent.
+type Attempt struct {
+	// InputTokens is what the API said it charged. Reported says whether it
+	// said anything at all: a request that failed, or whose answer carried no
+	// usage, reports zero tokens and means "unknown", not "free".
+	InputTokens int
+	Reported    bool
 }
 
 // Client scores lines. It holds no state that a request changes, so it is safe
@@ -67,6 +85,7 @@ type Client struct {
 
 	maxAttempts  int
 	retryBackoff time.Duration
+	onAttempt    func(Attempt)
 
 	// sleep is a field so tests can observe the backoff schedule without
 	// actually waiting it out.
@@ -89,6 +108,7 @@ func New(cfg Config) (*Client, error) {
 		httpClient:   &http.Client{Timeout: defaultTimeout},
 		maxAttempts:  cfg.MaxAttempts,
 		retryBackoff: cfg.RetryBackoff,
+		onAttempt:    cfg.OnAttempt,
 		sleep:        sleep,
 	}
 	if c.model == "" {
@@ -178,6 +198,12 @@ func (c *Client) attempt(ctx context.Context, body []byte, wantLines int) ([]flo
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "jevgrep/"+buildinfo.Version())
 
+	// Every path from here on has put the request on the wire, so the observer
+	// hears about it however it ends: an attempt that failed still took its
+	// time, and a user asking where a run went is owed the retries too.
+	at := Attempt{}
+	defer func() { c.observe(at) }()
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// The context ending is the user's doing, not a transient fault.
@@ -205,7 +231,14 @@ func (c *Client) attempt(ctx context.Context, body []byte, wantLines int) ([]flo
 		return nil, fmt.Errorf("jev: decode response: %w", err)
 	}
 
+	at = decoded.attempt()
 	return decoded.scores(wantLines)
+}
+
+func (c *Client) observe(a Attempt) {
+	if c.onAttempt != nil {
+		c.onAttempt(a)
+	}
 }
 
 // backoff is exponential with equal jitter: half the delay is fixed so waits

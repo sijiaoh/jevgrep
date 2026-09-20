@@ -1,0 +1,13 @@
+jevgrep: stats
+  files                1
+  lines read           7
+  blank                0  never sent
+  questions            7
+  cached               0  --no-cache
+  sent                 7
+  requests             1  1 batch, 0 retried
+  failed               0
+  input tokens     4,321
+  cost           $0.0002  at $0.042 per 1M input tokens
+  elapsed          12.4s
+  cache              off  --no-cache

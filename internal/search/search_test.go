@@ -87,6 +87,13 @@ func lines(file string, texts ...string) iter.Seq[input.Line] {
 	}
 }
 
+// batchSize is how many lines jev.Split puts in one request. The scheduler's
+// batches are jev's, so a test about "the first batch" asks for the number
+// rather than repeating it: the size is chosen there, and has changed.
+func batchSize() int {
+	return len(jev.Split("a meaning", make([]string, 1000))[0].Lines)
+}
+
 func numbered(prefix string, n int) []string {
 	texts := make([]string, n)
 	for i := range texts {
@@ -274,7 +281,8 @@ func TestEveryMeaningIsScoredForEveryLine(t *testing.T) {
 }
 
 func TestABatchThatCannotBeScoredIsReportedAndTheRestOfTheRunGoesOn(t *testing.T) {
-	texts := numbered("line", 40)
+	batch := batchSize()
+	texts := numbered("line", batch+10)
 	boom := errors.New("HTTP 503 after 3 attempts")
 	scorer := &fakeScorer{respond: func(req request) ([]float64, error) {
 		if req.lines[0] == texts[0] {
@@ -290,13 +298,13 @@ func TestABatchThatCannotBeScoredIsReportedAndTheRestOfTheRunGoesOn(t *testing.T
 		t.Fatalf("Run() = %v, want the run to carry on", err)
 	}
 
-	want := []Failure{{File: "a.txt", First: 1, Last: 30, Err: boom}}
+	want := []Failure{{File: "a.txt", First: 1, Last: batch, Err: boom}}
 	if !slices.Equal(got.failures, want) {
 		t.Errorf("failures = %+v, want %+v", got.failures, want)
 	}
 	// The skipped lines are neither printed nor counted, and the rest are.
-	if !slices.Equal(got.matched, texts[30:]) {
-		t.Errorf("emitted %q, want %q", got.matched, texts[30:])
+	if !slices.Equal(got.matched, texts[batch:]) {
+		t.Errorf("emitted %q, want %q", got.matched, texts[batch:])
 	}
 }
 
@@ -358,7 +366,8 @@ func TestARejectedKeyEndsTheWholeRun(t *testing.T) {
 }
 
 func TestCancellingKeepsWhatWasEmittedAndReportsNoBatchFailures(t *testing.T) {
-	texts := numbered("line", 95)
+	batch := batchSize()
+	texts := numbered("line", 3*batch+5)
 	ctx, cancel := context.WithCancel(t.Context())
 	scorer := &fakeScorer{respond: func(req request) ([]float64, error) {
 		if req.lines[0] != texts[0] {
@@ -388,7 +397,7 @@ func TestCancellingKeepsWhatWasEmittedAndReportsNoBatchFailures(t *testing.T) {
 	if err := s.Run(ctx, lines("a.txt", texts...)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() = %v, want context.Canceled", err)
 	}
-	if !slices.Equal(got.matched, texts[:30]) {
+	if !slices.Equal(got.matched, texts[:batch]) {
 		t.Errorf("emitted %q, want the first batch", got.matched)
 	}
 	// A cancelled request is the user stopping, not a batch worth a warning.
@@ -695,5 +704,148 @@ func TestInvertSelectsTheLinesThatWereNeverSent(t *testing.T) {
 	}
 	if !slices.EqualFunc(got.emitted, want, sameEmission) {
 		t.Errorf("emitted %+v, want %+v", got.emitted, want)
+	}
+}
+
+func TestACachedAnswerIsNeverSentAndStillDecidesTheLine(t *testing.T) {
+	texts := numbered("line", 60)
+	// Every line but the last is already known, and known to match.
+	known := map[string]float64{}
+	for _, text := range texts[:len(texts)-1] {
+		known[text] = 1
+	}
+
+	scorer := &fakeScorer{}
+	var got collector
+	opts := got.options(1)
+	opts.Cached = func(_, query string) (float64, bool) {
+		score, ok := known[query]
+		return score, ok
+	}
+	s := New(scorer, mustCompile(t, []Term{{Meaning: "line"}}, 0.5, false), opts)
+
+	if err := s.Run(t.Context(), lines("a.txt", texts...)); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	// The saving has to be in requests, not only in tokens: one line left to
+	// ask about is one request, however many lines the run read.
+	if n := len(scorer.requests); n != 1 {
+		t.Errorf("requests = %d, want 1: cached lines must be dropped before the input is split into batches", n)
+	}
+	if sent := scorer.sent(); len(sent) != 1 || sent[0] != texts[len(texts)-1] {
+		t.Errorf("sent = %v, want only %q", sent, texts[len(texts)-1])
+	}
+	if len(got.matched) != len(texts) {
+		t.Errorf("matched %d lines, want all %d", len(got.matched), len(texts))
+	}
+	for i, e := range got.emitted {
+		switch {
+		case e.text != texts[i]:
+			t.Fatalf("emitted[%d] = %q, want %q", i, e.text, texts[i])
+		case e.got != Match:
+			t.Errorf("%q: verdict = %v, want Match", e.text, e.got)
+		// A cached line is indistinguishable from a freshly scored one: it has
+		// its score, and nil would mean "never sent or failed" instead.
+		case len(e.scores) != 1 || e.scores[0] != 1:
+			t.Errorf("%q: scores = %v, want [1]", e.text, e.scores)
+		}
+	}
+}
+
+func TestOneMeaningCanBeCachedWhileAnotherIsAsked(t *testing.T) {
+	texts := []string{"alpha", "beta"}
+	scorer := &fakeScorer{}
+	scorer.respond = func(request) ([]float64, error) { return []float64{1, 1}, nil }
+
+	var got collector
+	opts := got.options(1)
+	// Both lines are known for "alpha" and neither for "beta".
+	opts.Cached = func(meaning, _ string) (float64, bool) {
+		if meaning == "alpha" {
+			return 1, true
+		}
+		return 0, false
+	}
+	s := New(scorer, mustCompile(t, []Term{{Meaning: "alpha", And: []string{"beta"}}}, 0.5, false), opts)
+
+	if err := s.Run(t.Context(), lines("a.txt", texts...)); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	for _, req := range scorer.requests {
+		if req.meaning != "beta" {
+			t.Errorf("asked about %q, which was already cached", req.meaning)
+		}
+	}
+	if len(got.matched) != len(texts) {
+		t.Errorf("matched = %v, want both lines", got.matched)
+	}
+}
+
+// The bookkeeping that drops cached questions before the split is the one
+// place M3 reached into the scheduler, and interleaving is where it can go
+// wrong: each meaning then owes a different set of the buffered lines, so the
+// index a batch was cut at is no longer the index in the queue. A wrong answer
+// here is silent -- a score landing on its neighbour -- so the scores are
+// checked per line and per meaning, with the cache answering something the
+// model never does.
+func TestInterleavedCacheHitsStillScoreEveryLineCorrectly(t *testing.T) {
+	const (
+		cachedScore = 1
+		freshScore  = 0.75
+	)
+	texts := numbered("line", 5*batchSize()+7)
+	// Two meanings that owe different lines, neither divisible by the other or
+	// by the batch size, so the batches of one straddle the gaps of the other.
+	cached := func(meaning, query string) (float64, bool) {
+		i := slices.Index(texts, query)
+		every := map[string]int{"alpha": 3, "beta": 5}[meaning]
+		if every == 0 || i%every != 0 {
+			return 0, false
+		}
+		return cachedScore, true
+	}
+
+	scorer := &fakeScorer{respond: func(req request) ([]float64, error) {
+		for _, line := range req.lines {
+			if _, ok := cached(req.meaning, line); ok {
+				return nil, fmt.Errorf("%q was asked of %q although it was cached", line, req.meaning)
+			}
+		}
+		return slices.Repeat([]float64{freshScore}, len(req.lines)), nil
+	}}
+
+	var got collector
+	opts := got.options(0)
+	opts.Cached = cached
+	s := New(scorer, mustCompile(t, []Term{{Meaning: "alpha", And: []string{"beta"}}}, 0.5, false), opts)
+
+	if err := s.Run(t.Context(), lines("a.txt", texts...)); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	if len(got.emitted) != len(texts) {
+		t.Fatalf("emitted %d lines, want %d, each exactly once", len(got.emitted), len(texts))
+	}
+	for i, e := range got.emitted {
+		want := make([]float64, 2)
+		for m, meaning := range []string{"alpha", "beta"} {
+			want[m] = freshScore
+			if score, ok := cached(meaning, texts[i]); ok {
+				want[m] = score
+			}
+		}
+		switch {
+		case e.text != texts[i]:
+			t.Fatalf("emitted[%d] = %q, want %q: the output is out of order", i, e.text, texts[i])
+		case e.got != Match:
+			t.Errorf("%q: verdict = %v, want Match", e.text, e.got)
+		case !slices.Equal(e.scores, want):
+			t.Errorf("%q: scores = %v, want %v", e.text, e.scores, want)
+		}
+	}
+	if len(got.failures) != 0 {
+		t.Errorf("failures = %+v, want none", got.failures)
 	}
 }

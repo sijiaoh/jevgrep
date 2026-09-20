@@ -19,8 +19,9 @@ PATHs, or from a whole tree with `-r`. On top of that: the expression
 (`-g` / `--hidden` / `--no-ignore`), grep's output modes and decorations
 (`-l` / `-L` / `-c` / `-q` / `-m`, `-A` / `-B` / `-C`, `-n` / `-H` / `-h` /
 `-Z` / `--color`), jevgrep's own two (`-p` for the score, `--json` for NDJSON),
-plus `--model`, `--login` to store an API key, `-V` and `--help`. The full list
-is `cli.Options`; read it there rather than here.
+plus `--dry-run`, `--stats`, `--no-cache`, `--model`, `--login` to store an API
+key, `-V` and `--help`. The full list is `cli.Options`; read it there rather
+than here.
 
 Two traits of the walk are jevgrep's rather than grep's, and are load-bearing:
 `.git/` and credential-shaped files are never searched by a walk — no option
@@ -28,21 +29,28 @@ reopens them — and binary content is skipped even when the path was named
 explicitly. Every line searched is billed, and a credential sent to a remote API
 cannot be recalled.
 
-What still does not exist: no cache and no `--dry-run` / `--stats`. Do not
-document or reference behavior that does not exist.
+Scores are cached on disk between runs unless `--no-cache` says otherwise, so
+the same search twice sends nothing the second time. `--dry-run` prices a
+search without sending any of it (and without an API key); `--stats` reports on
+stderr what a run actually cost, however it ended.
+
+What still does not exist: no `-j` / `--jobs`. Do not document or reference
+behavior that does not exist.
 
 ## Layout
 
 ```
-cmd/jevgrep/         entry point; only os.Exit(cli.Run(...))
-internal/cli/        command line: option table, parsing, wiring, exit codes
-internal/buildinfo/  version string of the running binary
-internal/apikey/     where the API key comes from, --login, terminal checks
-internal/jev/        Jev API client: chunking, retry backoff, error kinds
-internal/input/      reading lines from a file or stdin
-internal/walk/       expanding a directory into the files worth searching
-internal/output/     writing what was found: lines, context, counts, JSON
-internal/search/     expression evaluation, concurrent scoring, ordered verdicts
+cmd/jevgrep/          entry point; only os.Exit(cli.Run(...))
+internal/cli/         command line: option table, parsing, wiring, exit codes
+internal/buildinfo/   version string of the running binary
+internal/apikey/      where the API key comes from, --login, terminal checks
+internal/jev/         Jev API client: chunking, retry backoff, error kinds
+internal/cache/       scores kept on disk between runs, and where they live
+internal/input/       reading lines from a file or stdin
+internal/walk/        expanding a directory into the files worth searching
+internal/output/      writing what was found: lines, context, counts, JSON
+internal/search/      expression evaluation, concurrent scoring, ordered verdicts
+internal/calibration/ the labelled corpus the defaults were measured against
 ```
 
 New packages go under `internal/`. Create one when there is code to put in it —
@@ -51,7 +59,11 @@ no placeholder packages.
 ## Commands and toolchain
 
 - `make help` lists every target. `make check` is the gate CI runs; it must be
-  green before you report a task done.
+  green before you report a task done. `make calibrate` is the one target that
+  is not in it: it needs an API key and spends real money, so it is opt-in and
+  lives behind the `calibration` build tag. Nothing else in the repository
+  talks to the network from a test, and a test that must talk to it belongs
+  behind that tag too.
 - Tool versions come from `mise.toml` (`mise install`). Note that Go is pinned
   there to the module's *minimum* supported version, deliberately — read the
   comment before bumping it.
@@ -109,11 +121,49 @@ rather than assuming.
   `*jev.AuthError` is terminal and stops the whole run, `*jev.APIError` costs
   one batch and the search carries on. Neither carries the server's message —
   that is where the scored lines would come back at us.
+- `jev.PriceUSDPerMTokInput` and `jev.EstimateTokens` are the only places a
+  price and a token count are worked out, and `--stats` and `--dry-run` (its
+  table and its `--json` record alike) render nothing else. A second estimate
+  somewhere else would sooner or later quote a different price for the same
+  run. The estimate carries a fixed per-request overhead that `Split`
+  deliberately does not, and both numbers are measurements `make calibrate`
+  re-derives.
+- `--stats` prefers what the API said it charged to what jevgrep worked out,
+  and never mixes the two: the real count arrives through
+  `jev.Config.OnAttempt`, and an `Attempt` that reports nothing means unknown,
+  not free. The report is counts, plus the cache directory it deliberately
+  names so that it can be deleted — never a line, a searched file name or a
+  key, because it is written to be pasted into an issue. It is printed however
+  the run ended, Ctrl-C included, and failing to print it never changes the
+  exit code.
+- `cli.dryRun` prices the run it predicts, which is why it shares the reader,
+  the walk options, the batching and the cache lookup with `cli.grep` and
+  builds no client at all: no API key is loaded, because the price list must
+  not sit behind the till, and the cache is opened with `cache.OpenForReading`
+  so that a run which sent nothing leaves nothing behind either. The estimate
+  is a ceiling exactly when the command line can leave a file half read
+  (`config.stopsEarly`), not for every quota.
+- `search.Options.Cached` is asked before the input is split into batches, not
+  after: a cached answer that still filled a batch would save money and no
+  requests at all. `internal/cache` stores nothing but a hash, a probability
+  and a day, and a cache that cannot be opened is dropped silently rather than
+  failing the run. It treats a score as a function of (line, meaning) alone,
+  which `make calibrate` measures rather than assumes. Nothing may create a
+  cache file after `grep` has returned — batches still in flight are never
+  waited for — which is what `cache.Close` is for and why `cli.grep` defers it.
 - `search.Run` reports *every* line, exactly once, in input order however the
   batches finish, and calls neither `Emit` nor `Fail` once it has returned. A
   line arrives with a `Verdict` and its scores, and nil scores mean it has none
   — never sent, or its batch failed — which is a different thing from its
   verdict. The return value maps straight onto the exit code.
+- The default threshold (`cli.defaultThreshold`) and the batch size
+  (`jev.maxLinesPerChunk`) are measurements, not preferences: both carry the
+  numbers they were chosen from, and `make calibrate` is what produces those
+  numbers again. Change either one from a calibration run, not from taste, and
+  re-run it after a model update — `jev-latest` moves. The corpus alone cannot
+  pick a threshold: its classes are balanced and real input is not, so the
+  same run also measures what share of ordinary source a threshold would
+  print. Read both.
 - The version variable lives in `internal/buildinfo`, not `main`, because
   release tooling stamps it via ldflags and needs a symbol path that survives
   restructuring of `cmd/`.

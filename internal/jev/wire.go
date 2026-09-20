@@ -21,6 +21,23 @@ type question struct {
 
 type response struct {
 	Answers map[string]answer `json:"answers"`
+	Usage   usage             `json:"usage"`
+}
+
+// usage is what the API says it charged for the request. The field is
+// documented as optional, which is why it is a pointer: a response that says
+// nothing about tokens must not be read as one that says the request was free.
+type usage struct {
+	InputTokens *int `json:"input_tokens"`
+}
+
+// attempt is what this response tells an observer about the request it
+// answered.
+func (r response) attempt() Attempt {
+	if r.Usage.InputTokens == nil {
+		return Attempt{}
+	}
+	return Attempt{InputTokens: *r.Usage.InputTokens, Reported: true}
 }
 
 type answer struct {

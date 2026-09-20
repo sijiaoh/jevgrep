@@ -442,6 +442,16 @@ func TestJSONAndTextAgree(t *testing.T) {
 					t.Errorf("exit codes differ: text %d, json %d", text.code, js.code)
 				}
 
+				// Which lines there are, and which of them were selected,
+				// are the same in both formats whatever else happened. Their
+				// scores are too, bar one case that is timing and not format:
+				// past an -m quota the reader stops sending, and how many
+				// lines it had already sent when the quota was reached
+				// depends on how far ahead of the verdicts it had got. Such a
+				// line is printed as context either way; it just carries a
+				// score in the run where it was sent and none in the other.
+				scored := !quotaRace(args)
+
 				var want []string
 				for line := range strings.Lines(text.stdout) {
 					line = strings.TrimSuffix(line, "\n")
@@ -452,6 +462,10 @@ func TestJSONAndTextAgree(t *testing.T) {
 					if _, err := strconv.Atoi(num); err != nil {
 						// A context line: number, "-", score, "-", text.
 						num, rest, _ = strings.Cut(line, "-")
+						if !scored {
+							want = append(want, num+" false")
+							continue
+						}
 						want = append(want, num+" false "+scoreField(rest, "-"))
 						continue
 					}
@@ -460,6 +474,10 @@ func TestJSONAndTextAgree(t *testing.T) {
 
 				var got []string
 				for _, rec := range records(t, js.stdout) {
+					if !scored && !rec.Selected {
+						got = append(got, fmt.Sprintf("%d false", rec.Line))
+						continue
+					}
 					score := "?"
 					if rec.Score != nil {
 						score = strconv.FormatFloat(*rec.Score, 'f', 2, 64)
@@ -473,6 +491,17 @@ func TestJSONAndTextAgree(t *testing.T) {
 			})
 		}
 	}
+}
+
+// quotaRace reports a command line under which a line past an -m quota may or
+// may not have been scored before the reader was told to stop.
+func quotaRace(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-m") {
+			return true
+		}
+	}
+	return false
 }
 
 func scoreField(rest, sep string) string {

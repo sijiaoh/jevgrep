@@ -128,13 +128,15 @@ func mentionsError(line string) float64 {
 	return 0.1
 }
 
-// newEnv isolates the key and the config directory so that no test can pick up
-// the key of whoever is running it, or write to their config.
+// newEnv isolates the key, the config directory and the score cache so that no
+// test can pick up the key of whoever is running it, write to their config, or
+// answer from -- or pollute -- a cache shared with another test.
 func newEnv(t *testing.T, baseURL string) environment {
 	t.Helper()
 
 	t.Setenv(apikey.EnvVar, testKey)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	return environment{
 		stdin:    strings.NewReader(""),
 		terminal: fakeTerminal{},

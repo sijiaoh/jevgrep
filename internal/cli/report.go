@@ -31,6 +31,15 @@ func (o *opened) add(name string) int {
 	return len(o.names) - 1
 }
 
+// count is how many inputs were opened, which is the "files" line of --stats
+// and of a dry run: the files that were read, not the operands that were
+// named, and not the ones that could not be opened.
+func (o *opened) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.names)
+}
+
 func (o *opened) at(i int) (string, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

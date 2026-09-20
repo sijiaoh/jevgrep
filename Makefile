@@ -13,17 +13,26 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
 LDFLAGS := $(if $(VERSION),-X $(VERSION_PKG).version=$(VERSION))
 
 .DEFAULT_GOAL := help
-.PHONY: help build test vet lint fmt check clean
+.PHONY: help build test calibrate vet lint fmt check clean
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
-		| awk -F':.*?## ' '{printf "  \033[36m%-8s\033[0m %s\n", $$1, $$2}'
+		| awk -F':.*?## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build the binary into dist/
 	go build -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) $(CMD_PKG)
 
 test: ## Run tests with the race detector
 	go test -race ./...
+
+# Opt-in, and deliberately not part of check: it is the only target that talks
+# to the live API, so it needs an API key (internal/apikey), it costs money, and
+# it is the one thing CI must not run. It is what §11 asks for after a model
+# update: re-run it and read both halves of what it prints -- the sweep over
+# the labelled corpus and the share of ordinary source lines a threshold would
+# select -- then confirm the shipped defaults still hold up against them.
+calibrate: ## Score the labelled corpus against the live API (needs a key, costs money)
+	go test -tags calibration -count=1 -v -timeout 20m ./internal/calibration/
 
 vet: ## Run go vet
 	go vet ./...
