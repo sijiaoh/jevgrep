@@ -5,6 +5,14 @@
 [tools]
 go = "1.26.8"
 golangci-lint = "2.13.2"
+# Builds and publishes the release archives; `make check` runs `goreleaser check`
+# so a broken .goreleaser.yml fails before a tag is ever pushed.
+goreleaser = "2.18.2"
+# Lints install.sh in `make check`. Pinned for Linux and macOS only: upstream
+# ships no supported Windows build, and install.sh is a POSIX sh installer for
+# Linux and macOS, so there is nothing for the Windows runner to lint -- `make
+# shellcheck` skips itself there rather than failing over a missing tool.
+shellcheck = { version = "0.11.0", os = ["linux", "macos"] }
 
 [settings]
 # mise otherwise infers the Go version from go.mod's `go` directive, which is a

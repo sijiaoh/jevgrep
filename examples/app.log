@@ -1,0 +1,10 @@
+2026-09-18 03:11:07 INFO  GET /healthz 200 3ms
+2026-09-18 03:11:41 INFO  user 4182 signed in from 10.0.0.7
+2026-09-18 03:12:02 WARN  retrying upstream payments-api (attempt 2)
+2026-09-18 03:12:19 ERROR write /var/lib/pg/base/16384: input/output error
+2026-09-18 03:12:19 INFO  cache warm: 12840 keys
+2026-09-18 03:13:44 WARN  smartd: 1 uncorrectable sector on /dev/nvme0n1
+2026-09-18 03:14:02 ERROR payment 9931 declined by issuer
+2026-09-18 03:15:10 INFO  nightly backup finished in 4m12s
+2026-09-18 03:16:33 ERROR no space left on device while flushing WAL
+2026-09-18 03:17:01 INFO  GET /healthz 200 2ms

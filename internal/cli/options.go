@@ -43,9 +43,10 @@ import (
 // where it was.
 const defaultThreshold = 0.5
 
-// Option is one command line option, as --help and (from M4) the README both
-// render it. Nothing about an option is written down anywhere else: a second
-// copy of a summary is a second copy that drifts.
+// Option is one command line option, as --help and the README's option table
+// (rendered by internal/readme) both render it. Nothing about an option is
+// written down anywhere else: a second copy of a summary is a second copy that
+// drifts.
 type Option struct {
 	// Short is the single letter form without its dash, empty if there is none.
 	Short string
@@ -159,26 +160,46 @@ func apiHost() string {
 	return host
 }
 
+// Flags renders the option's forms the way they have to be written on the
+// command line, "-t, --threshold NUM". It is exported because --help is not
+// the only thing that lists the options: internal/readme renders the README's
+// option table from the same table, and a second opinion on how an option is
+// spelled is exactly the drift Options exists to prevent.
+func (o Option) Flags() string {
+	flags := "--" + o.Long
+	if o.Short != "" {
+		flags = "-" + o.Short + ", " + flags
+	}
+	switch {
+	// An optional argument is rendered the way it has to be written.
+	case o.ArgOptional:
+		flags += "[=" + o.Arg + "]"
+	case o.Arg != "":
+		flags += " " + o.Arg
+	}
+	return flags
+}
+
+// DefaultNote renders the option's default the way it is appended to a
+// summary, empty when there is none.
+func (o Option) DefaultNote() string {
+	if o.Default == "" {
+		return ""
+	}
+	return " (default " + renderDefault(o.Default) + ")"
+}
+
 // renderOptions lays the option table out as --help shows it.
 func renderOptions() string {
 	var b strings.Builder
 	for _, o := range Options {
 		flags := "  "
-		if o.Short != "" {
-			flags += "-" + o.Short + ", "
-		} else {
+		if o.Short == "" {
 			// Indented to the column the long names of the options that do
 			// have a short form start in.
 			flags += "    "
 		}
-		flags += "--" + o.Long
-		switch {
-		// An optional argument is rendered the way it has to be written.
-		case o.ArgOptional:
-			flags += "[=" + o.Arg + "]"
-		case o.Arg != "":
-			flags += " " + o.Arg
-		}
+		flags += o.Flags()
 
 		b.WriteString(flags)
 		if len(flags) >= summaryColumn {
@@ -188,9 +209,7 @@ func renderOptions() string {
 			b.WriteString(strings.Repeat(" ", summaryColumn-len(flags)))
 		}
 		b.WriteString(o.Summary)
-		if o.Default != "" {
-			fmt.Fprintf(&b, " (default %s)", renderDefault(o.Default))
-		}
+		b.WriteString(o.DefaultNote())
 		b.WriteString("\n")
 	}
 	return b.String()

@@ -1,0 +1,51 @@
+# Publishes the README as the project's home page, and install.sh at a short
+# address to curl it from. There is no second copy of the documentation here:
+# `make site` stages the README itself rather than anything written about it
+# (see .github/pages/_config.yml).
+name: Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Deploying an older commit over a newer one would silently roll the site back,
+# so queue the runs instead of cancelling them.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - run: make site
+      # The github-pages gem this runs: the same Jekyll and the same allowed
+      # themes a Pages branch build would use. The base URL a project site is
+      # served under is not among the things it fills in -- `make site` works
+      # that out and writes it into the staged config.
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: site
+          destination: site/_site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

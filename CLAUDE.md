@@ -2,8 +2,8 @@
 
 Conventions for AI agents working in this repository. This file holds only what
 an agent needs and cannot get elsewhere; anything already stated by `make help`,
-the Makefile, the config files or (once it exists) the README is referenced from
-here, not copied.
+the Makefile, the config files or the README is referenced from here, not
+copied.
 
 ## What this is
 
@@ -11,31 +11,19 @@ here, not copied.
 each line with a probability from a remote model instead of matching a pattern.
 Its command line is meant to be compatible with grep's.
 
-Current state: searching works, and so does most of grep's command line around
-it. `jevgrep "a disk error" app.log` scores the file's lines against the meaning
-and prints the ones that match; input can also come from a pipe, from several
-PATHs, or from a whole tree with `-r`. On top of that: the expression
-(`-e` / `--and` / `--not` / `-v` / `-t`), which files a walk searches
-(`-g` / `--hidden` / `--no-ignore`), grep's output modes and decorations
-(`-l` / `-L` / `-c` / `-q` / `-m`, `-A` / `-B` / `-C`, `-n` / `-H` / `-h` /
-`-Z` / `--color`), jevgrep's own two (`-p` for the score, `--json` for NDJSON),
-plus `--dry-run`, `--stats`, `--no-cache`, `--model`, `--login` to store an API
-key, `-V` and `--help`. The full list is `cli.Options`; read it there rather
-than here.
-
-Two traits of the walk are jevgrep's rather than grep's, and are load-bearing:
-`.git/` and credential-shaped files are never searched by a walk — no option
-reopens them — and binary content is skipped even when the path was named
-explicitly. Every line searched is billed, and a credential sent to a remote API
-cannot be recalled.
-
-Scores are cached on disk between runs unless `--no-cache` says otherwise, so
-the same search twice sends nothing the second time. `--dry-run` prices a
-search without sending any of it (and without an API key); `--stats` reports on
-stderr what a run actually cost, however it ended.
+What jevgrep does today is what the README documents, and the full list of
+options is `cli.Options` — read them there. This file deliberately restates
+neither: a second account of user-facing behavior is a second thing to keep in
+sync, and this is the copy that would go stale unnoticed.
 
 What still does not exist: no `-j` / `--jobs`. Do not document or reference
 behavior that does not exist.
+
+Two traits of the walk are jevgrep's rather than grep's, and are load-bearing —
+weakening either is never a refactor: `.git/` and credential-shaped files are
+never searched by a walk (no option reopens them) and binary content is skipped
+even when the path was named explicitly. Every line searched is billed, and a
+credential sent to a remote API cannot be recalled.
 
 ## Layout
 
@@ -51,27 +39,62 @@ internal/walk/        expanding a directory into the files worth searching
 internal/output/      writing what was found: lines, context, counts, JSON
 internal/search/      expression evaluation, concurrent scoring, ordered verdicts
 internal/calibration/ the labelled corpus the defaults were measured against
+internal/readme/      `make readme`: renders the README option table from cli.Options
+internal/installsh/   `make install-test`: installs a snapshot release with install.sh
+internal/demo/        `make demo`: reruns the demos the README pins output for
 ```
 
 New packages go under `internal/`. Create one when there is code to put in it —
 no placeholder packages.
 
+The rest of what the repository publishes, and what each of those is for — none
+of them is the place to write a second copy of another's:
+
+```
+README.md             user-facing behavior, and the Pages home page is this file
+install.sh            the one-line installer; POSIX sh, at the repository root
+                      because `make site` publishes it beside the README
+.goreleaser.yml       what a release is made of: archives, checksums, ldflags
+.github/workflows/    ci.yml, release.yml, pages.yml — one `make` target each
+.github/pages/        the Jekyll config `make site` stages next to the README
+CONTRIBUTING.md       getting set up, the gate, and the steps to cut a release
+SECURITY.md           what is sent, what never is, and how to report a flaw
+CHANGELOG.md          Keep a Changelog; a release's notes are pasted from it
+CODE_OF_CONDUCT.md    Contributor Covenant, verbatim
+examples/             the files the README's commands are run against, which
+                      makes them part of what `make demo` checks
+.github/              issue and pull request templates, and dependabot.yml
+```
+
 ## Commands and toolchain
 
 - `make help` lists every target. `make check` is the gate CI runs; it must be
-  green before you report a task done. `make calibrate` is the one target that
-  is not in it: it needs an API key and spends real money, so it is opt-in and
-  lives behind the `calibration` build tag. Nothing else in the repository
-  talks to the network from a test, and a test that must talk to it belongs
-  behind that tag too.
+  green before you report a task done. It is more than the Go tests, so it can
+  fail for reasons that are not a compiler's: the README's option table having
+  drifted from `cli.Options`, `install.sh` failing to lint or failing to
+  actually install a freshly cross-built release, or an invalid
+  `.goreleaser.yml`. That means it needs everything `mise.toml` pins, not only
+  Go.
+- Two targets are deliberately outside it, for the same reason: they talk to the
+  live API, so they need an API key, spend real money, and CI must never run
+  them. `make calibrate` re-measures the numbers the shipped defaults were
+  chosen from and lives behind the `calibration` build tag; `make demo` reruns
+  the commands the README pins output for, and is a step in
+  `CONTRIBUTING.md`'s release procedure rather than something to run per
+  change. Nothing else in the repository talks to the network from a test, and a
+  test that must talk to it belongs behind the `calibration` tag too.
 - Tool versions come from `mise.toml` (`mise install`). Note that Go is pinned
   there to the module's *minimum* supported version, deliberately — read the
   comment before bumping it.
 - Add a command → add a Makefile target. Add or bump a tool → edit `mise.toml`.
-  **Never write a build, test or lint command, or a version number, into
-  `.github/workflows/ci.yml`**; it runs `make check` and only sets up what the
-  runner cannot provide itself, and that is what keeps local and CI results from
-  drifting apart.
+  **Never write a build, test, lint or release command, or a version number,
+  into a workflow under `.github/workflows/`**; each one runs a `make` target
+  (`check`, `release`, `site`) and only sets up what the runner cannot provide
+  itself, and that is what keeps local and CI results from drifting apart.
+- Releasing and the project's home page are `make release` (from a `v*` tag,
+  driven by `.goreleaser.yml`) and `make site` (from `master`). Neither is run
+  by hand: `make release-snapshot` is the local rehearsal, and it publishes
+  nothing.
 
 ## Working agreements
 
@@ -111,9 +134,19 @@ rather than assuming.
 - Exit codes follow grep and are named: use `cli.ExitMatch` / `ExitNoMatch` /
   `ExitError` / `ExitInterrupt`, never a bare number.
 - `cli.Options` is the one place every option's name, argument and summary
-  lives: `--help` is rendered from it, and the README's option table has to be
-  rendered from it as well. Change an option there, not in prose. An option
-  whose argument may only be attached with `=` is marked `ArgOptional`.
+  lives: `--help` is rendered from it, and so is the README's option table, by
+  `make readme` (`make check` fails when the two have drifted). Change an option
+  there, not in prose. An option whose argument may only be attached with `=` is
+  marked `ArgOptional`.
+- A fenced `console` block in the README that shows output is a promise, and
+  `internal/demo` is what keeps it: `make demo` reruns the command and diffs its
+  output against what is printed there, up to three deliberate normalizations
+  and nothing else. Adding such a block signs the README up for that check, so
+  read `internal/demo` before you add one — a block that cannot be rerun, or
+  whose numbers legitimately move, needs one of its directives, and those are
+  HTML comments that must not contain `--`, or a reader would see them on the
+  home page. Prose in the README is checked by nothing at all: a number written
+  into a sentence there goes stale quietly.
 - `input.Line` keeps the line twice on purpose: `Text` is the bytes as they were
   read and is what gets printed, while `Query()` returns the cleaned, truncated
   text sent to the API. Nothing done for the API may reach the output.

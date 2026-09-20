@@ -60,8 +60,37 @@ func TestLoginStoresAKeyTheAPIAccepts(t *testing.T) {
 	}
 	// The prompt ends with "key: " and no newline, so the user types on the
 	// same line; the newline after it is the one the terminal did not echo.
-	if want := "TypeSafe API key: \n"; stderr.String() != want {
+	if want := guidanceLine + "TypeSafe API key: \n"; stderr.String() != want {
 		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
+// guidanceLine is the line --login prints above the prompt. It is spelled out
+// here rather than imported so that a change to the wording has to be made
+// twice, on purpose: it is the only thing standing between a user and a prompt
+// that looks like a hung program.
+const guidanceLine = "jevgrep: paste a key from " + apikey.SignupURL + " (it will not be echoed)\n"
+
+// The test above pins the two lines byte for byte. This one pins the two
+// things the first of them is *for*, so that a rewording that drops either
+// half fails even though both literals were updated together.
+func TestLoginSaysWhereToGetAKeyAndThatItIsNotEchoed(t *testing.T) {
+	isolate(t)
+	srv := scoringServer(t, http.StatusOK)
+	var stderr bytes.Buffer
+
+	if _, err := login(t, &fakeTerminal{secret: testKey}, &stderr, srv.URL); err != nil {
+		t.Fatalf("Login() = %v", err)
+	}
+
+	// The first line only: what follows is the prompt the user is typing into,
+	// and an explanation printed after it is an explanation nobody read.
+	first, _, _ := strings.Cut(stderr.String(), "\n")
+	if !strings.Contains(first, apikey.SignupURL) {
+		t.Errorf("first line = %q, want it to name %q", first, apikey.SignupURL)
+	}
+	if !strings.Contains(first, "not be echoed") {
+		t.Errorf("first line = %q, want it to warn that the key is not echoed", first)
 	}
 }
 

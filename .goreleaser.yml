@@ -1,0 +1,57 @@
+# What a tagged release is made of. `make check` runs `goreleaser check` against
+# this file, so a mistake here fails on an ordinary push rather than on the tag.
+# The commands that use it live in the Makefile, and the goreleaser version in
+# mise.toml; neither is repeated in .github/workflows/.
+version: 2
+
+project_name: jevgrep
+
+builds:
+  - main: ./cmd/jevgrep
+    binary: jevgrep
+    env:
+      # jevgrep is a single static binary: nothing in it needs libc, and a cgo
+      # build would tie the linux archives to the glibc of the runner.
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      # Without it the archives differ between two builds of the same commit,
+      # which makes the checksums unverifiable by anyone but the runner.
+      - -trimpath
+    ldflags:
+      # buildinfo, not main: release tooling needs a symbol path that survives a
+      # restructuring of cmd/ (see internal/buildinfo). .Tag rather than
+      # .Version keeps the leading "v", so a release binary and a `go install`
+      # binary report the version the same way.
+      - -s -w -X github.com/sijiaoh/jevgrep/internal/buildinfo.version={{ .Tag }}
+
+archives:
+  # jevgrep_0.1.0_linux_amd64.tar.gz -- the name install.sh downloads.
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # A tag like v0.2.0-rc.1 publishes as a pre-release without anyone deciding so
+  # by hand.
+  prerelease: auto

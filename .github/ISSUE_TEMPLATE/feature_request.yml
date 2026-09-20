@@ -1,0 +1,23 @@
+name: Feature request
+description: Something jevgrep should be able to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The search or the workflow you are stuck on, not the option you have in
+        mind for it. What you would have to do today counts as part of this.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like jevgrep to do
+      description: >
+        If grep, ripgrep or another tool already spells this, say how — matching
+        a command line people know beats inventing one.
+    validations:
+      required: true

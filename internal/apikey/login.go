@@ -31,7 +31,21 @@ var (
 	ErrNotSaved = errors.New("apikey: the key could not be stored")
 )
 
-const prompt = "TypeSafe API key: "
+// What --login prints before it reads. The line above the prompt earns its
+// place twice over: the user got here from a hint they have since scrolled
+// past, and the terminal echoes nothing while they paste, which reads as a
+// hung program to anyone not expecting it. It is built from SignupURL so the
+// address cannot drift from the one the "no API key" hint gives.
+//
+// It is worded here rather than by the CLI, which owns the wording of
+// everything else --login says, because only this function knows whether a
+// prompt is about to happen at all: printing it before the call would put it
+// on top of the "--login needs a terminal" error, where there is no prompt to
+// explain.
+const (
+	guidance = "jevgrep: paste a key from " + SignupURL + " (it will not be echoed)\n"
+	prompt   = "TypeSafe API key: "
+)
 
 // LoginOptions is what Login needs from the process around it.
 type LoginOptions struct {
@@ -58,7 +72,7 @@ func Login(ctx context.Context, opts LoginOptions) (string, error) {
 		return "", ErrNotTerminal
 	}
 
-	fmt.Fprint(opts.Stderr, prompt)
+	fmt.Fprint(opts.Stderr, guidance+prompt)
 	key, err := opts.Terminal.ReadSecret()
 	// The newline the terminal did not echo, so that whatever is printed next
 	// starts on its own line.

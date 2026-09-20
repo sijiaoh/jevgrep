@@ -1,0 +1,43 @@
+# Turns a v* tag into a GitHub release. Like ci.yml it carries no command lines
+# and no version numbers of its own: `make release` is what a release is (see
+# .goreleaser.yml), and mise.toml is where the goreleaser version lives.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Create the release and upload the archives to it.
+      contents: write
+      # The two an attestation needs: a short-lived OIDC token to sign with, and
+      # the right to record the result against the repository.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # goreleaser builds the changelog from the commits since the previous
+          # tag, and a shallow clone has neither the commits nor the tag.
+          fetch-depth: 0
+
+      # Installs exactly the Go and goreleaser versions pinned in mise.toml.
+      - uses: jdx/mise-action@v4
+
+      - run: make release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Records which workflow, at which commit, produced these exact bytes, so
+      # that a download can be checked with `gh attestation verify` against this
+      # repository and not merely against a checksums file published beside it.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt

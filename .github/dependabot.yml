@@ -1,0 +1,20 @@
+# The module has one dependency on purpose, and the workflows pin their actions
+# by major version, so this is a slow feed by design: it exists to surface a
+# security fix, not to keep a lock file busy.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,62 @@
+name: Bug report
+description: Something jevgrep did that it should not have done
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report a security problem here — see
+        [SECURITY.md](https://github.com/sijiaoh/jevgrep/blob/master/SECURITY.md).
+
+        Anything you paste is public. Redact your API key and any line you
+        would not publish.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what it printed, and what you expected instead.
+      placeholder: |
+        $ jevgrep -n "a disk error" app.log
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: stats
+    attributes:
+      label: Output of the same command with --stats
+      description: >
+        Re-run it with `--stats` and paste everything it wrote to stderr. Almost
+        every question about a wrong result is really a question about what was
+        actually sent, and this is the answer. It contains no lines, no file
+        names and no key — the one path it prints is your cache directory, so
+        redact that if your home directory is private. If the bug has nothing
+        to do with a search, write "n/a".
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Output of jevgrep --version
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 15.2, arm64
+    validations:
+      required: true
+
+  - type: input
+    id: install
+    attributes:
+      label: How you installed it
+      placeholder: install.sh / go install / release archive / built from source
+    validations:
+      required: false

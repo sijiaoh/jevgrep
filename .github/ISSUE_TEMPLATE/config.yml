@@ -1,0 +1,11 @@
+# Only two kinds of issue, so that every one of them is either a defect or a
+# request. Anything else belongs in Discussions or, for a vulnerability, in a
+# private advisory.
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/sijiaoh/jevgrep/discussions
+    about: Ask how to do something, or float an idea before it is a request.
+  - name: Security vulnerability
+    url: https://github.com/sijiaoh/jevgrep/security/advisories/new
+    about: Report it privately. Please do not open an issue.

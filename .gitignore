@@ -4,3 +4,4 @@
 .pockode/agent-roles/*
 !.pockode/agent-roles/index.json
 /dist/
+/site/

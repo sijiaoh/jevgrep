@@ -1,0 +1,9 @@
+# The GitHub Pages site is README.md and nothing else: the README is the single
+# source of truth for user-facing behavior, so the home page renders it rather
+# than restating it. `make site` stages this file next to it.
+#
+# primer is GitHub's own README stylesheet: it wraps the content in the same
+# markdown-body class GitHub renders a README with, and adds no headline,
+# tagline or description of its own that could drift away from the README's.
+# (`make site` titles the page so that the theme keeps quiet -- see there.)
+theme: jekyll-theme-primer
