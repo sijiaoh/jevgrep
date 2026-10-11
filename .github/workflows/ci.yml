@@ -49,6 +49,6 @@ jobs:
 
       # Installs exactly the Go and golangci-lint versions pinned in mise.toml;
       # no version number is repeated in this file.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
 
       - run: make check

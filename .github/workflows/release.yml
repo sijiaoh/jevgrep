@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0
 
       # Installs exactly the Go and goreleaser versions pinned in mise.toml.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
 
       - run: make release
         env:
